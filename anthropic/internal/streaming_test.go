@@ -3,7 +3,7 @@ package internal
 import (
 	"testing"
 
-	anthropic "github.com/shepard-labs/go-ai-sdk-anthropic/anthropic"
+	anthropic "github.com/shepard-labs/go-ai-sdk/anthropic"
 )
 
 func TestSSEParsePing(t *testing.T) {

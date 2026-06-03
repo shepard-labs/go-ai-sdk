@@ -1,17 +1,17 @@
-# go-ai-sdk-anthropic
+# go-ai-sdk
 
 Go provider SDK for Anthropic models, including text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results.
 
 Module path:
 
 ```bash
-github.com/shepard-labs/go-ai-sdk-anthropic
+github.com/shepard-labs/go-ai-sdk
 ```
 
 Package path:
 
 ```go
-github.com/shepard-labs/go-ai-sdk-anthropic/anthropic
+github.com/shepard-labs/go-ai-sdk/anthropic
 ```
 
 ## Status
@@ -53,7 +53,7 @@ This repository implements the five foundation phases in `specs/`:
 ## Installation
 
 ```bash
-go get github.com/shepard-labs/go-ai-sdk-anthropic
+go get github.com/shepard-labs/go-ai-sdk
 ```
 
 ## Quick Start
@@ -66,7 +66,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/shepard-labs/go-ai-sdk-anthropic/anthropic"
+    "github.com/shepard-labs/go-ai-sdk/anthropic"
 )
 
 func main() {
@@ -258,7 +258,7 @@ for _, content := range result.Content {
 Provider tools live under `anthropic/tools`:
 
 ```go
-import anthropictools "github.com/shepard-labs/go-ai-sdk-anthropic/anthropic/tools"
+import anthropictools "github.com/shepard-labs/go-ai-sdk/anthropic/tools"
 
 tools := []anthropic.Tool{
     anthropictools.CodeExecution_20250522(),

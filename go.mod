@@ -1,3 +1,3 @@
-module github.com/shepard-labs/go-ai-sdk-anthropic
+module github.com/shepard-labs/go-ai-sdk
 
-go 1.26.4
+go 1.25

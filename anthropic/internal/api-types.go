@@ -1,6 +1,6 @@
 package internal
 
-import anthropic "github.com/shepard-labs/go-ai-sdk-anthropic/anthropic"
+import anthropic "github.com/shepard-labs/go-ai-sdk/anthropic"
 
 type MessagesRequest struct {
 	Model                  string

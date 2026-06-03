@@ -3,7 +3,7 @@ package tools
 import (
 	"testing"
 
-	anthropic "github.com/shepard-labs/go-ai-sdk-anthropic/anthropic"
+	anthropic "github.com/shepard-labs/go-ai-sdk/anthropic"
 )
 
 func TestPrepareToolsOptions(t *testing.T) {

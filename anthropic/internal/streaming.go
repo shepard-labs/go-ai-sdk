@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	anthropic "github.com/shepard-labs/go-ai-sdk-anthropic/anthropic"
+	anthropic "github.com/shepard-labs/go-ai-sdk/anthropic"
 )
 
 type StreamEvent struct {

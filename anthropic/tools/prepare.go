@@ -1,6 +1,6 @@
 package tools
 
-import anthropic "github.com/shepard-labs/go-ai-sdk-anthropic/anthropic"
+import anthropic "github.com/shepard-labs/go-ai-sdk/anthropic"
 
 func PrepareTools(input []anthropic.Tool, opts anthropic.ToolOptions) []anthropic.Tool {
 	prepared := make([]anthropic.Tool, len(input))

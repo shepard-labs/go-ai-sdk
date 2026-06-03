@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to `go-ai-sdk-anthropic`.
+Thanks for contributing to `go-ai-sdk`.
 
 ## Development Setup
 
