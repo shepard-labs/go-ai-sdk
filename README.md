@@ -14,16 +14,6 @@ Package path:
 github.com/shepard-labs/go-ai-sdk/anthropic
 ```
 
-## Status
-
-This repository implements the five foundation phases in `specs/`:
-
-- Phase 1: provider, auth, model capabilities, core types
-- Phase 2: text generation, text streaming, prompt conversion, request/response parsing
-- Phase 3: function tools, provider tools, tool choice, tool streaming
-- Phase 4: thinking, structured output, cache control, MCP/context request support
-- Phase 5: citations, typed provider tool results/errors, structured logging, polish
-
 ## Features
 
 - Provider creation with API key or bearer token auth
