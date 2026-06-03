@@ -10,6 +10,8 @@ import (
 
 const defaultBaseURL = "https://api.anthropic.com/v1"
 const anthropicVersion = "2023-06-01"
+const defaultMaxResponseBodyBytes int64 = 32 << 20
+const defaultMaxErrorBodyBytes int64 = 1 << 20
 
 var ErrMultipleAuthMethods = errors.New("anthropic: APIKey and AuthToken cannot both be set")
 
@@ -27,39 +29,45 @@ type RetryOptions struct {
 }
 
 type ProviderSettings struct {
-	BaseURL    string
-	APIKey     string
-	AuthToken  string
-	Headers    http.Header
-	Fetch      Fetcher
-	GenerateID IDGenerator
-	Name       string
-	Logger     Logger
-	Retry      *RetryOptions
+	BaseURL               string
+	APIKey                string
+	AuthToken             string
+	Headers               http.Header
+	Fetch                 Fetcher
+	GenerateID            IDGenerator
+	Name                  string
+	Logger                Logger
+	Retry                 *RetryOptions
+	MaxResponseBodyBytes  int64
+	MaxErrorResponseBytes int64
 }
 
 var Anthropic = CreateAnthropic(ProviderSettings{})
 
 type anthropicProvider struct {
-	baseURL    string
-	headers    http.Header
-	fetch      Fetcher
-	generateID IDGenerator
-	name       string
-	logger     Logger
-	retry      RetryOptions
-	err        error
+	baseURL               string
+	headers               http.Header
+	fetch                 Fetcher
+	generateID            IDGenerator
+	name                  string
+	logger                Logger
+	retry                 RetryOptions
+	maxResponseBodyBytes  int64
+	maxErrorResponseBytes int64
+	err                   error
 }
 
 func CreateAnthropic(opts ProviderSettings) Provider {
 	p := &anthropicProvider{
-		baseURL:    valueOrDefault(opts.BaseURL, defaultBaseURL),
-		headers:    make(http.Header),
-		fetch:      opts.Fetch,
-		generateID: opts.GenerateID,
-		name:       valueOrDefault(opts.Name, "anthropic"),
-		logger:     opts.Logger,
-		retry:      defaultRetryOptions(opts.Retry),
+		baseURL:               valueOrDefault(opts.BaseURL, defaultBaseURL),
+		headers:               make(http.Header),
+		fetch:                 opts.Fetch,
+		generateID:            opts.GenerateID,
+		name:                  valueOrDefault(opts.Name, "anthropic"),
+		logger:                opts.Logger,
+		retry:                 defaultRetryOptions(opts.Retry),
+		maxResponseBodyBytes:  maxPositiveOrDefault(opts.MaxResponseBodyBytes, defaultMaxResponseBodyBytes),
+		maxErrorResponseBytes: maxPositiveOrDefault(opts.MaxErrorResponseBytes, defaultMaxErrorBodyBytes),
 	}
 	if p.logger == nil {
 		p.logger = noopLogger{}
@@ -203,6 +211,13 @@ func (p *anthropicProvider) Err() error   { return p.err }
 
 func valueOrDefault(value, fallback string) string {
 	if value != "" {
+		return value
+	}
+	return fallback
+}
+
+func maxPositiveOrDefault(value, fallback int64) int64 {
+	if value > 0 {
 		return value
 	}
 	return fallback

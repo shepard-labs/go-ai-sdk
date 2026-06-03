@@ -219,12 +219,38 @@ func TestDoGenerateTextOnly(t *testing.T) {
 
 func TestDoGenerateAPIError(t *testing.T) {
 	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
-		return jsonResponse(400, `{"error":{"type":"invalid_request_error","message":"bad"}}`), nil
+		resp := jsonResponse(400, `{"error":{"type":"invalid_request_error","message":"bad"}}`)
+		resp.Header.Set("x-request-id", "req_123")
+		return resp, nil
 	}}
 	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
 	_, err := model.DoGenerate(context.Background(), GenerateOptions{})
 	apiErr, ok := err.(*APICallError)
-	if !ok || apiErr.Status != 400 || apiErr.Message != "bad" || apiErr.Retryable {
+	if !ok || apiErr.Status != 400 || apiErr.Message != "bad" || apiErr.Type != "invalid_request_error" || apiErr.RequestID != "req_123" || apiErr.Retryable {
+		t.Fatalf("err = %#v", err)
+	}
+}
+
+func TestDoGenerateAPIErrorBodyLimit(t *testing.T) {
+	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResponse(500, strings.Repeat("x", 64)), nil
+	}}
+	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher, Retry: &RetryOptions{MaxRetries: 0}, MaxErrorResponseBytes: 8}).Model("claude-3-haiku-20240307")
+	_, err := model.DoGenerate(context.Background(), GenerateOptions{})
+	apiErr, ok := err.(*APICallError)
+	if !ok || !apiErr.Truncated || len(apiErr.Body) != 8 || !apiErr.Retryable {
+		t.Fatalf("err = %#v", err)
+	}
+}
+
+func TestDoGenerateSuccessBodyLimit(t *testing.T) {
+	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"content":[{"type":"text","text":"too large"}]}`), nil
+	}}
+	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher, MaxResponseBodyBytes: 8}).Model("claude-3-haiku-20240307")
+	_, err := model.DoGenerate(context.Background(), GenerateOptions{})
+	apiErr, ok := err.(*APICallError)
+	if !ok || !apiErr.Truncated || apiErr.Status != 200 || apiErr.Retryable {
 		t.Fatalf("err = %#v", err)
 	}
 }

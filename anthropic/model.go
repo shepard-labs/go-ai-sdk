@@ -47,14 +47,21 @@ func (m *anthropicLanguageModel) DoGenerate(ctx context.Context, opts GenerateOp
 		return nil, &APICallError{Message: "fetcher returned nil response and nil error", Retryable: true}
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	limit := m.provider.maxResponseBodyBytes
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limit = m.provider.maxErrorResponseBytes
+	}
+	respBody, truncated, err := readLimited(resp.Body, limit)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err := apiCallError(resp.StatusCode, respBody, nil)
+		err := apiCallError(resp, respBody, truncated, nil)
 		m.provider.logger.Error("anthropic generate API error", "model", m.modelID, "status", resp.StatusCode, "error", err)
 		return nil, err
+	}
+	if truncated {
+		return nil, &APICallError{Message: "response body exceeded configured limit", Status: resp.StatusCode, Headers: cloneHeader(resp.Header), RequestID: responseRequestID(resp.Header), Body: respBody, Truncated: true, Retryable: false}
 	}
 	result, err := parseGenerateResponse(respBody)
 	if err != nil {
@@ -82,8 +89,8 @@ func (m *anthropicLanguageModel) DoStream(ctx context.Context, opts StreamOption
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		respBody, readErr := io.ReadAll(resp.Body)
-		err := apiCallError(resp.StatusCode, respBody, readErr)
+		respBody, truncated, readErr := readLimited(resp.Body, m.provider.maxErrorResponseBytes)
+		err := apiCallError(resp, respBody, truncated, readErr)
 		m.provider.logger.Error("anthropic stream API error", "model", m.modelID, "status", resp.StatusCode, "error", err)
 		return nil, err
 	}
@@ -605,15 +612,68 @@ func normalizeCitations(citations []Citation) []Citation {
 	return citations
 }
 
-func apiCallError(status int, body []byte, cause error) error {
+func readLimited(reader io.Reader, limit int64) ([]byte, bool, error) {
+	if limit <= 0 {
+		limit = defaultMaxResponseBodyBytes
+	}
+	limited := io.LimitReader(reader, limit+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, false, err
+	}
+	if int64(len(body)) > limit {
+		return body[:limit], true, nil
+	}
+	return body, false, nil
+}
+
+func apiCallError(resp *http.Response, body []byte, truncated bool, cause error) error {
+	status := 0
+	headers := http.Header(nil)
+	requestID := ""
+	if resp != nil {
+		status = resp.StatusCode
+		headers = cloneHeader(resp.Header)
+		requestID = responseRequestID(resp.Header)
+	}
 	message := strings.TrimSpace(string(body))
 	var decoded struct {
 		Error APIError `json:"error"`
 	}
+	errorType := ""
 	if err := json.Unmarshal(body, &decoded); err == nil && decoded.Error.Message != "" {
 		message = decoded.Error.Message
+		errorType = decoded.Error.Type
 	}
-	return &APICallError{Status: status, Message: message, Retryable: status == http.StatusTooManyRequests || status >= 500, Cause: cause}
+	if truncated && message != "" {
+		message += " [truncated]"
+	} else if truncated {
+		message = "response body exceeded configured limit"
+	}
+	return &APICallError{Status: status, Message: message, Type: errorType, Retryable: status == http.StatusTooManyRequests || status >= 500, Headers: headers, RequestID: requestID, Body: body, Truncated: truncated, Cause: cause}
+}
+
+func cloneHeader(header http.Header) http.Header {
+	if header == nil {
+		return nil
+	}
+	cloned := make(http.Header, len(header))
+	for k, values := range header {
+		cloned[k] = append([]string(nil), values...)
+	}
+	return cloned
+}
+
+func responseRequestID(header http.Header) string {
+	if header == nil {
+		return ""
+	}
+	for _, name := range []string{"x-request-id", "request-id", "x-amzn-requestid"} {
+		if value := header.Get(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func parseSSEStream(reader io.Reader, out chan<- StreamPart, response *StreamResponse) {

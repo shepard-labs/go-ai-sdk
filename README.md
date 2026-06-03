@@ -138,10 +138,32 @@ provider := anthropic.CreateAnthropic(anthropic.ProviderSettings{
     GenerateID: func() string { return "request-id" },
     Name: "anthropic",
     Logger: myLogger,
+    Retry: &anthropic.RetryOptions{
+        MaxRetries: 2,
+        BaseDelay:  200 * time.Millisecond,
+        MaxDelay:   2 * time.Second,
+        Jitter:     true,
+    },
+    MaxResponseBodyBytes:  32 << 20,
+    MaxErrorResponseBytes: 1 << 20,
 })
 ```
 
 `GenerateID` is sent as `x-request-id` when configured.
+
+If `Fetch` is not provided, the provider uses an internal `http.Client` with a tuned transport, connection pooling, TLS handshake timeout, idle connection timeout, and response-header timeout. Request lifetimes should still be controlled with `context.Context` deadlines or cancellation.
+
+Retry behavior defaults to two retries for network errors, HTTP 429, and HTTP 5xx responses. Retries use exponential backoff, jitter, and honor `Retry-After` when present. Disable retries with:
+
+```go
+provider := anthropic.CreateAnthropic(anthropic.ProviderSettings{
+    Retry: &anthropic.RetryOptions{MaxRetries: 0},
+})
+```
+
+Successful non-streaming responses are limited by `MaxResponseBodyBytes` and error responses by `MaxErrorResponseBytes`. Defaults are 32 MiB for successful responses and 1 MiB for error responses. If a response exceeds the configured limit, `DoGenerate` returns an `*anthropic.APICallError` with `Truncated: true` and the retained bytes in `Body`.
+
+API errors expose structured metadata via `*anthropic.APICallError`, including `Status`, `Type`, `Message`, `Retryable`, `Headers`, `RequestID`, `Body`, `Truncated`, and `Cause`.
 
 ## Streaming
 

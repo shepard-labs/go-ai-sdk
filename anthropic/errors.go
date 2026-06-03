@@ -1,6 +1,9 @@
 package anthropic
 
-import "fmt"
+import (
+	"fmt"
+	"net/http"
+)
 
 type APIError struct {
 	Type    string
@@ -16,8 +19,13 @@ func (e APIError) Error() string {
 
 type APICallError struct {
 	Message   string
+	Type      string
 	Status    int
 	Retryable bool
+	Headers   http.Header
+	RequestID string
+	Body      []byte
+	Truncated bool
 	Cause     error
 }
 
