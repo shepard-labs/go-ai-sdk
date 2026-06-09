@@ -1,6 +1,6 @@
 # go-ai-sdk
 
-Go provider SDK for Anthropic models, including text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results.
+Go provider SDK with provider-specific subpackages. The Anthropic package includes text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results.
 
 Module path:
 
@@ -8,10 +8,11 @@ Module path:
 github.com/shepard-labs/go-ai-sdk
 ```
 
-Package path:
+Provider package paths:
 
 ```go
 github.com/shepard-labs/go-ai-sdk/anthropic
+github.com/shepard-labs/go-ai-sdk/openaicompatible
 ```
 
 ## Features
@@ -85,6 +86,54 @@ func main() {
     }
 }
 ```
+
+## OpenAI-Compatible Providers
+
+Use the `openaicompatible` package for APIs shaped like OpenAI's API. An OpenAI-Compatible Provider requires both `BaseURL` and `Name`; `APIKey` is sent as an `Authorization: Bearer` header.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+
+    "github.com/shepard-labs/go-ai-sdk/openaicompatible"
+)
+
+func main() {
+    provider := openaicompatible.CreateOpenAICompatible(openaicompatible.ProviderSettings{
+        BaseURL: "https://api.example.com/v1",
+        Name:    "example",
+        APIKey:  os.Getenv("EXAMPLE_API_KEY"),
+    })
+    if err := provider.Err(); err != nil {
+        log.Fatal(err)
+    }
+
+    model := provider.Chat("gpt-4o")
+    result, err := model.DoGenerate(context.Background(), openaicompatible.GenerateOptions{
+        Messages: []openaicompatible.Message{
+            openaicompatible.UserMessage{Content: []openaicompatible.UserContent{
+                openaicompatible.TextContent{Text: "Write a haiku about Go."},
+            }},
+        },
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    for _, content := range result.Content {
+        if text, ok := content.(openaicompatible.TextContent); ok {
+            fmt.Println(text.Text)
+        }
+    }
+}
+```
+
+The same provider can create chat, completion, embedding, and image model families with `Chat`, `Completion`, `Embedding`, and `Image`.
 
 ## Authentication
 
