@@ -1,6 +1,6 @@
 # go-ai-sdk
 
-Go provider SDK with provider-specific subpackages. The Anthropic package includes text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results.
+Go provider SDK with provider-specific subpackages. The Anthropic package includes text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results. The OpenRouter package includes chat, completion, embeddings, image generation, video generation, provider routing, BYOK headers, and OpenRouter usage metadata.
 
 Module path:
 
@@ -13,6 +13,7 @@ Provider package paths:
 ```go
 github.com/shepard-labs/go-ai-sdk/anthropic
 github.com/shepard-labs/go-ai-sdk/openaicompatible
+github.com/shepard-labs/go-ai-sdk/openrouter
 ```
 
 ## Features
@@ -134,6 +135,51 @@ func main() {
 ```
 
 The same provider can create chat, completion, embedding, and image model families with `Chat`, `Completion`, `Embedding`, and `Image`.
+
+## OpenRouter
+
+Use the `openrouter` package for OpenRouter's native API. `CreateOpenRouter` defaults to compatible mode, while the package-level `openrouter.OpenRouter` provider uses strict mode. `APIKey` falls back to `OPENROUTER_API_KEY` at request time.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+
+    "github.com/shepard-labs/go-ai-sdk/openrouter"
+)
+
+func main() {
+    provider := openrouter.CreateOpenRouter(openrouter.ProviderSettings{
+        APIKey:  os.Getenv("OPENROUTER_API_KEY"),
+        AppName: "Example App",
+        AppURL:  "https://example.com",
+    })
+
+    model := provider.Chat("openai/gpt-4o-mini")
+    result, err := model.DoGenerate(context.Background(), openrouter.GenerateOptions{
+        Messages: []openrouter.Message{
+            openrouter.UserMessage{Content: []openrouter.UserContent{
+                openrouter.TextContent{Text: "Write a haiku about Go."},
+            }},
+        },
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    for _, content := range result.Content {
+        if text, ok := content.(openrouter.TextContent); ok {
+            fmt.Println(text.Text)
+        }
+    }
+}
+```
+
+The same OpenRouter provider can create chat, completion, embedding, image, and video model families with `Chat`, `Completion`, `Embedding`, `Image`, and `VideoModel`. `Model` routes `openai/gpt-3.5-turbo-instruct` to completions and other model IDs to chat.
 
 ## Authentication
 
