@@ -386,9 +386,6 @@ func TestStubs_ReturnUnsupportedError(t *testing.T) {
 	var uf UnsupportedFunctionalityError
 
 	// Other model families are still stubs in M5.
-	if _, err := p.ImageModel("imagen-4.0-generate-001").(*googleImageModel).DoGenerate(nil, ImageGenerateOptions{}); !errors.As(err, &uf) {
-		t.Errorf("image DoGenerate: got %T (%v), want UnsupportedFunctionalityError", err, err)
-	}
 	if _, err := p.VideoModel("veo-3.0-generate-001").(*googleVideoModel).DoGenerate(nil, VideoGenerateOptions{}); !errors.As(err, &uf) {
 		t.Errorf("video DoGenerate: got %T (%v), want UnsupportedFunctionalityError", err, err)
 	}

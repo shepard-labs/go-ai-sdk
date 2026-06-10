@@ -2,47 +2,11 @@ package google
 
 // model_stubs.go defines the concrete model structs and wires them to the
 // model interfaces. The language model struct and its methods live in
-// chat.go (Milestone 4). The other model structs are stubs for later
+// chat.go (Milestone 4). The image model struct and its methods live in
+// image.go (Milestone 3). The other model structs are stubs for later
 // milestones; they return UnsupportedFunctionalityError until implemented.
 
 import "context"
-
-// ---- Image model stub ----
-
-type googleImageModel struct {
-	provider *googleProvider
-	modelID  string
-	settings ImageModelSettings
-}
-
-func (m *googleImageModel) ModelID() string  { return m.modelID }
-func (m *googleImageModel) Provider() string { return m.provider.name + ".image" }
-
-func (m *googleImageModel) MaxImagesPerCall() int {
-	if m.settings.MaxImagesPerCall != nil {
-		return *m.settings.MaxImagesPerCall
-	}
-	if isGeminiImageModel(m.modelID) {
-		return 10
-	}
-	return 4 // Imagen
-}
-
-func (m *googleImageModel) DoGenerate(ctx context.Context, opts ImageGenerateOptions) (*ImageGenerateResult, error) {
-	return nil, UnsupportedFunctionalityError{Functionality: "DoGenerate (image, not yet implemented — see Milestone 3)"}
-}
-
-// isGeminiImageModel reports whether the model ID belongs to the Gemini image
-// family (vs. Imagen).
-func isGeminiImageModel(modelID string) bool {
-	switch {
-	case hasPrefix(modelID, "gemini-") && contains(modelID, "image"):
-		return true
-	case hasPrefix(modelID, "nano-banana"):
-		return true
-	}
-	return false
-}
 
 // ---- Video model stub ----
 
@@ -116,21 +80,4 @@ func buildToolFactories() ToolFactories {
 			return Tool{Type: "provider", ID: "google.vertex_rag_store", Name: "vertex_rag_store", ArgsSchema: args}
 		},
 	}
-}
-
-// ---- small string helpers used by stubs ----
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-
-func contains(s, substr string) bool {
-	return len(substr) > 0 && len(s) >= len(substr) && func() bool {
-		for i := 0; i <= len(s)-len(substr); i++ {
-			if s[i:i+len(substr)] == substr {
-				return true
-			}
-		}
-		return false
-	}()
 }
