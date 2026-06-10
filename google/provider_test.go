@@ -376,25 +376,34 @@ func TestProviderName(t *testing.T) {
 	}
 }
 
-// TestStubs_ReturnUnsupportedError verifies that stub methods return
+// TestStubs_ReturnUnsupportedError verifies that stub methods (DoStream of
+// the language model, plus image / video / speech / files) return
 // UnsupportedFunctionalityError (not nil, not a different error type).
 func TestStubs_ReturnUnsupportedError(t *testing.T) {
 	t.Setenv("GOOGLE_GENERATIVE_AI_API_KEY", "test-key")
 	p := CreateGoogle(ProviderSettings{})
 
-	ctx := t // context.Background() would be cleaner but we want no imports
-	_ = ctx
-
 	lm := p.LanguageModel("gemini-2.0-flash")
-	_, err := lm.DoGenerate(nil, GenerateOptions{})
+
+	// DoStream is still a stub in M4 (M5 implements it).
+	_, err := lm.DoStream(nil, StreamOptions{})
 	var uf UnsupportedFunctionalityError
 	if !errors.As(err, &uf) {
-		t.Errorf("DoGenerate: got %T (%v), want UnsupportedFunctionalityError", err, err)
+		t.Errorf("DoStream: got %T (%v), want UnsupportedFunctionalityError", err, err)
 	}
 
-	_, err = lm.DoStream(nil, StreamOptions{})
-	if !errors.As(err, &uf) {
-		t.Errorf("DoStream: got %T (%v), want UnsupportedFunctionalityError", err, err)
+	// Other model families are still stubs in M4.
+	if _, err := p.ImageModel("imagen-4.0-generate-001").(*googleImageModel).DoGenerate(nil, ImageGenerateOptions{}); !errors.As(err, &uf) {
+		t.Errorf("image DoGenerate: got %T (%v), want UnsupportedFunctionalityError", err, err)
+	}
+	if _, err := p.VideoModel("veo-3.0-generate-001").(*googleVideoModel).DoGenerate(nil, VideoGenerateOptions{}); !errors.As(err, &uf) {
+		t.Errorf("video DoGenerate: got %T (%v), want UnsupportedFunctionalityError", err, err)
+	}
+	if _, err := p.SpeechModel("gemini-2.5-flash-preview-tts").(*googleSpeechModel).DoGenerate(nil, SpeechGenerateOptions{}); !errors.As(err, &uf) {
+		t.Errorf("speech DoGenerate: got %T (%v), want UnsupportedFunctionalityError", err, err)
+	}
+	if _, err := p.Files().(*googleFiles).Upload(nil, nil, FilesUploadOptions{}); !errors.As(err, &uf) {
+		t.Errorf("files Upload: got %T (%v), want UnsupportedFunctionalityError", err, err)
 	}
 }
 

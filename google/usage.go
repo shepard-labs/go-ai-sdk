@@ -1,6 +1,10 @@
 package google
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/shepard-labs/go-ai-sdk/google/internal"
+)
 
 // convertGoogleUsage converts raw Google UsageMetadata to the SDK Usage type.
 // Mapping:
@@ -11,7 +15,7 @@ import "encoding/json"
 //	outputTokens.total    = candidatesTokenCount + thoughtsTokenCount
 //	outputTokens.text     = candidatesTokenCount
 //	outputTokens.reasoning = thoughtsTokenCount
-func convertGoogleUsage(raw *apiUsageMetadata) Usage {
+func convertGoogleUsage(raw *internal.APIUsageMetadata) Usage {
 	if raw == nil {
 		return Usage{}
 	}
@@ -32,7 +36,7 @@ func convertGoogleUsage(raw *apiUsageMetadata) Usage {
 			Text:      intPtr(candidates),
 			Reasoning: intPtr(thoughts),
 		},
-		Raw: marshalRaw(raw),
+		Raw: marshalUsageRaw(raw),
 	}
 }
 
@@ -44,7 +48,7 @@ func defaultChatUsage() Usage {
 
 func intPtr(v int) *int { return &v }
 
-func marshalRaw(v any) json.RawMessage {
+func marshalUsageRaw(v any) json.RawMessage {
 	if v == nil {
 		return nil
 	}
@@ -53,19 +57,4 @@ func marshalRaw(v any) json.RawMessage {
 		return nil
 	}
 	return b
-}
-
-// apiUsageMetadata is the subset of the Google UsageMetadata wire struct needed
-// by convertGoogleUsage. The full struct lives in internal/api-types.go; this
-// local alias is used by usage.go to avoid an import cycle.
-type apiUsageMetadata = internalUsageMetadata
-
-// internalUsageMetadata matches the fields of internal.apiUsageMetadata used in
-// usage conversion.
-type internalUsageMetadata struct {
-	PromptTokenCount        int `json:"promptTokenCount"`
-	CachedContentTokenCount int `json:"cachedContentTokenCount"`
-	CandidatesTokenCount    int `json:"candidatesTokenCount"`
-	ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
-	TotalTokenCount         int `json:"totalTokenCount"`
 }

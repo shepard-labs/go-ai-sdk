@@ -1,36 +1,11 @@
 package google
 
 // model_stubs.go defines the concrete model structs and wires them to the
-// model interfaces. Each struct's DoGenerate / DoStream method returns
-// UnsupportedFunctionalityError for milestones that have not yet been
-// implemented. Real implementations replace these stubs in later milestones.
+// model interfaces. The language model struct and its methods live in
+// chat.go (Milestone 4). The other model structs are stubs for later
+// milestones; they return UnsupportedFunctionalityError until implemented.
 
-import (
-	"context"
-	"regexp"
-)
-
-// ---- Language model stub ----
-
-type googleLanguageModel struct {
-	provider *googleProvider
-	modelID  string
-}
-
-func (m *googleLanguageModel) ModelID() string  { return m.modelID }
-func (m *googleLanguageModel) Provider() string { return m.provider.name + ".chat" }
-
-func (m *googleLanguageModel) SupportURLs() map[string][]*regexp.Regexp {
-	return cloneRegexpMap(m.provider.SupportURLs())
-}
-
-func (m *googleLanguageModel) DoGenerate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
-	return nil, UnsupportedFunctionalityError{Functionality: "DoGenerate (not yet implemented — see Milestone 4)"}
-}
-
-func (m *googleLanguageModel) DoStream(ctx context.Context, opts StreamOptions) (*StreamResult, error) {
-	return nil, UnsupportedFunctionalityError{Functionality: "DoStream (not yet implemented — see Milestone 5)"}
-}
+import "context"
 
 // ---- Image model stub ----
 

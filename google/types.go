@@ -285,6 +285,7 @@ type ImageContent struct {
 }
 
 func (ImageContent) IsUserContent() {}
+func (ImageContent) IsContent()     {}
 
 // AudioContent is an audio content part.
 type AudioContent struct {
