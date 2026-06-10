@@ -1,0 +1,27 @@
+package cohere
+
+const (
+	ModelCommandA032025            = "command-a-03-2025"
+	ModelCommandAReasoning082025   = "command-a-reasoning-08-2025"
+	ModelCommandAVision072025      = "command-a-vision-07-2025"
+	ModelCommandR7B122024          = "command-r7b-12-2024"
+	ModelCommandRPlus042024        = "command-r-plus-04-2024"
+	ModelCommandRPlus              = "command-r-plus"
+	ModelCommandR082024            = "command-r-08-2024"
+	ModelCommandR032024            = "command-r-03-2024"
+	ModelCommandR                  = "command-r"
+	ModelCommand                   = "command"
+	ModelCommandNightly            = "command-nightly"
+	ModelCommandLight              = "command-light"
+	ModelCommandLightNightly       = "command-light-nightly"
+	ModelEmbedEnglishV30           = "embed-english-v3.0"
+	ModelEmbedMultilingualV30      = "embed-multilingual-v3.0"
+	ModelEmbedEnglishLightV30      = "embed-english-light-v3.0"
+	ModelEmbedMultilingualLightV30 = "embed-multilingual-light-v3.0"
+	ModelEmbedEnglishV20           = "embed-english-v2.0"
+	ModelEmbedEnglishLightV20      = "embed-english-light-v2.0"
+	ModelEmbedMultilingualV20      = "embed-multilingual-v2.0"
+	ModelRerankV35                 = "rerank-v3.5"
+	ModelRerankEnglishV30          = "rerank-english-v3.0"
+	ModelRerankMultilingualV30     = "rerank-multilingual-v3.0"
+)

@@ -1,6 +1,6 @@
 # go-ai-sdk
 
-Go provider SDK with provider-specific subpackages. The Anthropic package includes text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results. The OpenRouter package includes chat, completion, embeddings, image generation, video generation, provider routing, BYOK headers, and OpenRouter usage metadata.
+Go provider SDK with provider-specific subpackages. The Anthropic package includes text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results. The OpenRouter package includes chat, completion, embeddings, image generation, video generation, provider routing, BYOK headers, and OpenRouter usage metadata. The Cohere package includes chat generation, chat streaming, embeddings, reranking, citations, thinking, and Cohere RAG documents.
 
 Module path:
 
@@ -12,6 +12,7 @@ Provider package paths:
 
 ```go
 github.com/shepard-labs/go-ai-sdk/anthropic
+github.com/shepard-labs/go-ai-sdk/cohere
 github.com/shepard-labs/go-ai-sdk/openaicompatible
 github.com/shepard-labs/go-ai-sdk/openrouter
 ```
@@ -180,6 +181,124 @@ func main() {
 ```
 
 The same OpenRouter provider can create chat, completion, embedding, image, and video model families with `Chat`, `Completion`, `Embedding`, `Image`, and `VideoModel`. `Model` routes `openai/gpt-3.5-turbo-instruct` to completions and other model IDs to chat.
+
+## Cohere
+
+Use the `cohere` package for Cohere's native v2 API. `CreateCohere` defaults to `https://api.cohere.com/v2`, sends `Authorization: Bearer <key>`, and falls back to `COHERE_API_KEY` when `ProviderSettings.APIKey` is empty.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+
+    "github.com/shepard-labs/go-ai-sdk/cohere"
+)
+
+func main() {
+    provider := cohere.CreateCohere(cohere.ProviderSettings{
+        APIKey: os.Getenv("COHERE_API_KEY"),
+    })
+    if err := provider.Err(); err != nil {
+        log.Fatal(err)
+    }
+
+    model := provider.Model("command-a-03-2025")
+    result, err := model.DoGenerate(context.Background(), cohere.GenerateOptions{
+        MaxOutputTokens: intPtr(256),
+        Messages: []cohere.Message{
+            cohere.UserMessage{Content: []cohere.UserContent{
+                cohere.TextContent{Text: "Write a haiku about Go."},
+            }},
+        },
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    for _, content := range result.Content {
+        switch part := content.(type) {
+        case cohere.TextContent:
+            fmt.Println(part.Text)
+        case cohere.SourceContent:
+            fmt.Println("source:", part.Title)
+        }
+    }
+}
+
+func intPtr(v int) *int { return &v }
+```
+
+The same Cohere provider can create chat, embedding, and reranking model families with `Model`/`LanguageModel`, `Embedding`, and `Reranking`. The embedding provider string is `cohere.textEmbedding`; reranking uses `cohere.reranking`.
+
+Cohere streaming emits typed stream parts:
+
+```go
+stream, err := provider.Model("command-a-03-2025").DoStream(ctx, cohere.StreamOptions{
+    GenerateOptions: cohere.GenerateOptions{
+        Messages: []cohere.Message{
+            cohere.UserMessage{Content: []cohere.UserContent{
+                cohere.TextContent{Text: "Stream a short answer about Go."},
+            }},
+        },
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+for part := range stream.Stream {
+    switch p := part.(type) {
+    case cohere.StreamTextDelta:
+        fmt.Print(p.Text)
+    case cohere.StreamReasoningDelta:
+        fmt.Print(p.Text)
+    case cohere.StreamToolCall:
+        fmt.Println("tool call:", p.ToolName, string(p.Input))
+    case cohere.StreamError:
+        log.Println(p.Err)
+    }
+}
+```
+
+Cohere embeddings use `/embed` with float embeddings and default `input_type` of `search_query`:
+
+```go
+embeddings, err := provider.Embedding("embed-english-v3.0").DoEmbed(ctx, cohere.EmbedOptions{
+    Values: []string{"What is Go?", "Go is a programming language."},
+    ProviderOptions: cohere.ProviderOptions{
+        "cohere": {
+            "inputType": "search_document",
+            "truncate": "END",
+        },
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Println(len(embeddings.Embeddings), embeddings.Usage.Tokens)
+```
+
+Cohere reranking supports text documents and object documents. Object documents are JSON-stringified and return a compatibility warning.
+
+```go
+ranking, err := provider.Reranking("rerank-v3.5").DoRerank(ctx, cohere.RerankOptions{
+    Query:     "best Go web framework",
+    Documents: cohere.TextDocuments("net/http", "gin", "chi"),
+    TopN:      intPtr(2),
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, item := range ranking.Ranking {
+    fmt.Println(item.Index, item.RelevanceScore)
+}
+```
 
 ## Authentication
 
