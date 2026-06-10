@@ -250,3 +250,62 @@ func TestDoStream_FunctionCall_NoArgs(t *testing.T) {
 		t.Errorf("Input = %s, want {}", toolCall.ToolCall.Input)
 	}
 }
+
+func TestDoStream_ServerToolCall(t *testing.T) {
+	chunks := []string{
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"toolCall":{"toolType":"google_search","id":"sc1","args":{"q":"weather"}}}]}}]}`,
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"toolResponse":{"toolType":"google_search","id":"sc1","response":{"results":["sunny"]}}}]}}]}`,
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}`,
+	}
+	p := newTestProvider(t, newSSEHandler(t, chunks))
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	res, _ := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
+	parts := collectStream(t, res.Stream, 2*time.Second)
+	var call *StreamToolCall
+	var result *StreamToolResult
+	for _, p := range parts {
+		if v, ok := p.(StreamToolCall); ok {
+			c := v
+			call = &c
+		}
+		if v, ok := p.(StreamToolResult); ok {
+			r := v
+			result = &r
+		}
+	}
+	if call == nil {
+		t.Fatalf("no tool call: %+v", parts)
+	}
+	if !call.ToolCall.Dynamic {
+		t.Errorf("expected Dynamic=true")
+	}
+	if result == nil {
+		t.Fatalf("no tool result: %+v", parts)
+	}
+	if result.ToolResult.ToolCallID != call.ToolCall.ToolCallID {
+		t.Errorf("result id %q != call id %q", result.ToolResult.ToolCallID, call.ToolCall.ToolCallID)
+	}
+}
+
+func TestDoStream_Sources(t *testing.T) {
+	chunks := []string{
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"hi"}]},"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://a.example","title":"A"}},{"web":{"uri":"https://a.example","title":"A dup"}},{"image":{"sourceUri":"https://i.example/x.png","title":"I"}},{"retrievedContext":{"uri":"https://r.example/p.pdf","title":"R"}},{"maps":{"uri":"https://m.example","title":"M"}}]}}]}`,
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}`,
+	}
+	p := newTestProvider(t, newSSEHandler(t, chunks))
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	res, _ := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
+	parts := collectStream(t, res.Stream, 2*time.Second)
+	urls := map[string]int{}
+	for _, p := range parts {
+		if v, ok := p.(StreamSource); ok {
+			urls[v.Source.URL]++
+		}
+	}
+	if len(urls) != 4 {
+		t.Errorf("unique sources = %d, want 4: %+v", len(urls), urls)
+	}
+	if urls["https://a.example"] != 1 {
+		t.Errorf("dedup failed: %+v", urls)
+	}
+}

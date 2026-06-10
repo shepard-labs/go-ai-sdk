@@ -571,13 +571,58 @@ func providerMetadataWithSig(name, sig string) ProviderMetadata {
 }
 
 func (m *googleLanguageModel) handleServerToolCall(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
-	_ = parts
-	_ = p
-	_ = state
+	if p.ToolCall == nil {
+		return
+	}
+	tc := p.ToolCall
+	id := tc.ID
+	if id == "" {
+		id = m.provider.generateID()
+	}
+	input := tc.Args
+	if len(input) == 0 {
+		input = json.RawMessage("{}")
+	}
+	pm := ProviderMetadata{"google": map[string]any{
+		"serverToolType":  tc.ToolType,
+		"thoughtSignature": p.ThoughtSignature,
+	}}
+	state.toolState[id] = &streamToolState{
+		ID:               id,
+		ToolName:         tc.ToolType,
+		ProviderExecuted: true,
+		IsServer:         true,
+		Dynamic:          true,
+		ServerToolType:   tc.ToolType,
+		ThoughtSignature: p.ThoughtSignature,
+		HasStarted:       true,
+		Emitted:          true,
+	}
+	state.lastServerToolID = id
+	parts <- StreamToolCall{ToolCall: ToolCallContent{
+		ToolCallID:       id,
+		ToolName:         tc.ToolType,
+		Input:            input,
+		ProviderExecuted: true,
+		Dynamic:          true,
+		ProviderMetadata: pm,
+	}}
 }
 
 func (m *googleLanguageModel) handleServerToolResponse(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
-	_ = parts
-	_ = p
-	_ = state
+	if p.ToolResponse == nil {
+		return
+	}
+	tr := p.ToolResponse
+	id := tr.ID
+	if id == "" {
+		id = state.lastServerToolID
+	}
+	pm := ProviderMetadata{"google": map[string]any{"serverToolType": tr.ToolType}}
+	parts <- StreamToolResult{ToolResult: ToolResultContent{
+		ToolCallID:       id,
+		Output:           ToolResultOutput{Type: "json", Value: tr.Response},
+		ProviderExecuted: true,
+		ProviderMetadata: pm,
+	}}
 }

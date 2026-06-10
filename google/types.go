@@ -371,9 +371,12 @@ func (CodeExecutionResultContent) IsContent()          {}
 
 // ToolResultContent carries the output of a tool call.
 type ToolResultContent struct {
-	ToolCallID      string
-	Output          ToolResultOutput
-	ProviderOptions ProviderOptions
+	ToolCallID       string
+	Output           ToolResultOutput
+	ProviderExecuted bool
+	Dynamic          bool
+	ProviderMetadata ProviderMetadata
+	ProviderOptions  ProviderOptions
 }
 
 func (ToolResultContent) IsToolContent() {}
