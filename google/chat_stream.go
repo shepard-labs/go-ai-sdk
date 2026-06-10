@@ -13,7 +13,6 @@ package google
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 
 	"github.com/shepard-labs/go-ai-sdk/google/internal"
 )
@@ -258,12 +257,116 @@ func (m *googleLanguageModel) processChatStreamChunk(parts chan<- StreamPart, ch
 // StreamParts. The candidate is needed to access GroundingMetadata for
 // source extraction.
 func (m *googleLanguageModel) processChatStreamPart(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState, cand *internal.APICandidate) {
-	_ = http.Header{}
-	// Body filled in by Task 6.
-	_ = parts
-	_ = p
-	_ = state
-	_ = cand
+	if p == nil {
+		return
+	}
+	if cand != nil && cand.GroundingMetadata != nil {
+		state.extractAndEmitSources(parts, cand.GroundingMetadata)
+	}
+	// Reasoning text.
+	if p.Text != "" {
+		if p.Thought != nil && *p.Thought {
+			if !state.reasoningOpen {
+				state.reasoningOpen = true
+				state.reasoningID = "reasoning-0"
+				parts <- StreamReasoningStart{ID: state.reasoningID}
+			}
+			parts <- StreamReasoningDelta{ID: state.reasoningID, Text: p.Text}
+			return
+		}
+		// Plain text.
+		if state.reasoningOpen {
+			parts <- StreamReasoningEnd{ID: state.reasoningID}
+			state.reasoningOpen = false
+		}
+		if !state.textOpen {
+			state.textOpen = true
+			state.textID = "txt-0"
+			parts <- StreamTextStart{ID: state.textID}
+		}
+		parts <- StreamTextDelta{ID: state.textID, Text: p.Text}
+		return
+	}
+	// Inline data (file/image) — close any open text/reasoning.
+	if p.InlineData != nil {
+		if state.textOpen {
+			parts <- StreamTextEnd{ID: state.textID}
+			state.textOpen = false
+		}
+		if state.reasoningOpen {
+			parts <- StreamReasoningEnd{ID: state.reasoningID}
+			state.reasoningOpen = false
+		}
+		if p.Thought != nil && *p.Thought {
+			parts <- StreamReasoningFile{Data: p.InlineData.Data, MediaType: p.InlineData.MimeType}
+		} else {
+			parts <- StreamFile{Data: p.InlineData.Data, MediaType: p.InlineData.MimeType}
+		}
+		return
+	}
+	// File data: surface the URI as a metadata-only event. We do NOT
+	// emit StreamFile with empty data; the URL is recorded in
+	// providerMetadata via a StreamRaw-style side channel. For now,
+	// close any open text block and move on.
+	if p.FileData != nil {
+		if state.textOpen {
+			parts <- StreamTextEnd{ID: state.textID}
+			state.textOpen = false
+		}
+		if state.reasoningOpen {
+			parts <- StreamReasoningEnd{ID: state.reasoningID}
+			state.reasoningOpen = false
+		}
+		// The URL is conveyed as provider metadata; skip the file emit.
+		return
+	}
+	// Executable code / code execution result.
+	if p.ExecutableCode != nil {
+		m.handleCodeExecutionStart(parts, p, state)
+		return
+	}
+	if p.CodeExecutionResult != nil {
+		m.handleCodeExecutionResult(parts, p, state)
+		return
+	}
+	// Function call (client-side).
+	if p.FunctionCall != nil {
+		m.handleFunctionCall(parts, p, state)
+		return
+	}
+	// Server tool call.
+	if p.ToolCall != nil {
+		m.handleServerToolCall(parts, p, state)
+		return
+	}
+	// Server tool response.
+	if p.ToolResponse != nil {
+		m.handleServerToolResponse(parts, p, state)
+		return
+	}
+	// Unknown part: record a warning, do not crash.
+	state.warnings = append(state.warnings, Warning{
+		Type:    "other",
+		Feature: "unknown-part",
+		Message: "unrecognized part keys; preserved in providerMetadata",
+	})
+}
+
+// extractAndEmitSources walks the grounding metadata, deduplicates by
+// URL, and emits a StreamSource for each new source.
+func (s *chatStreamState) extractAndEmitSources(parts chan<- StreamPart, gm *internal.APIGroundingMetadata) {
+	srcs := extractGroundingSources(gm)
+	for _, src := range srcs {
+		if src.URL == "" {
+			continue
+		}
+		if _, seen := s.seenSourceURLs[src.URL]; seen {
+			continue
+		}
+		s.seenSourceURLs[src.URL] = struct{}{}
+		s.sources = append(s.sources, src)
+		parts <- StreamSource{Source: src, ProviderMetadata: nil}
+	}
 }
 
 // flushStreamState closes any still-open text/reasoning/tool blocks at
@@ -283,4 +386,42 @@ func (s *chatStreamState) flushStreamState(parts chan<- StreamPart) {
 			st.HasEnded = true
 		}
 	}
+}
+
+// ---- Part handlers (filled in by subsequent tasks) ----
+
+func (m *googleLanguageModel) handleCodeExecutionStart(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
+	_ = parts
+	_ = p
+	_ = state
+}
+
+func (m *googleLanguageModel) handleCodeExecutionResult(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
+	_ = parts
+	_ = p
+	_ = state
+}
+
+func (m *googleLanguageModel) handleFunctionCall(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
+	_ = parts
+	_ = p
+	_ = state
+}
+
+func (m *googleLanguageModel) handleFunctionResponse(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
+	_ = parts
+	_ = p
+	_ = state
+}
+
+func (m *googleLanguageModel) handleServerToolCall(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
+	_ = parts
+	_ = p
+	_ = state
+}
+
+func (m *googleLanguageModel) handleServerToolResponse(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
+	_ = parts
+	_ = p
+	_ = state
 }

@@ -376,23 +376,16 @@ func TestProviderName(t *testing.T) {
 	}
 }
 
-// TestStubs_ReturnUnsupportedError verifies that stub methods (DoStream of
-// the language model, plus image / video / speech / files) return
-// UnsupportedFunctionalityError (not nil, not a different error type).
+// TestStubs_ReturnUnsupportedError verifies that stub methods (image /
+// video / speech / files) return UnsupportedFunctionalityError (not nil,
+// not a different error type). DoStream is implemented in M5.
 func TestStubs_ReturnUnsupportedError(t *testing.T) {
 	t.Setenv("GOOGLE_GENERATIVE_AI_API_KEY", "test-key")
 	p := CreateGoogle(ProviderSettings{})
 
-	lm := p.LanguageModel("gemini-2.0-flash")
-
-	// DoStream is still a stub in M4 (M5 implements it).
-	_, err := lm.DoStream(nil, StreamOptions{})
 	var uf UnsupportedFunctionalityError
-	if !errors.As(err, &uf) {
-		t.Errorf("DoStream: got %T (%v), want UnsupportedFunctionalityError", err, err)
-	}
 
-	// Other model families are still stubs in M4.
+	// Other model families are still stubs in M5.
 	if _, err := p.ImageModel("imagen-4.0-generate-001").(*googleImageModel).DoGenerate(nil, ImageGenerateOptions{}); !errors.As(err, &uf) {
 		t.Errorf("image DoGenerate: got %T (%v), want UnsupportedFunctionalityError", err, err)
 	}
