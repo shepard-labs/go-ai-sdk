@@ -584,7 +584,7 @@ func (m *googleLanguageModel) handleServerToolCall(parts chan<- StreamPart, p *i
 		input = json.RawMessage("{}")
 	}
 	pm := ProviderMetadata{"google": map[string]any{
-		"serverToolType":  tc.ToolType,
+		"serverToolType":   tc.ToolType,
 		"thoughtSignature": p.ThoughtSignature,
 	}}
 	state.toolState[id] = &streamToolState{

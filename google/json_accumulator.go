@@ -26,11 +26,11 @@ import (
 // GoogleJSONAccumulator is a single-call scoped JSON builder. Zero value is
 // ready to use.
 type GoogleJSONAccumulator struct {
-	pathStack      []pathEntry
-	stringOpen     bool
-	closed         bool
-	accumulated    map[string]any // structured view of the current state
-	hasValue       map[string]bool // path strings that have a set value
+	pathStack   []pathEntry
+	stringOpen  bool
+	closed      bool
+	accumulated map[string]any  // structured view of the current state
+	hasValue    map[string]bool // path strings that have a set value
 }
 
 func (a *GoogleJSONAccumulator) pathKey(segments []any) string {

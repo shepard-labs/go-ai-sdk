@@ -33,10 +33,10 @@ func TestJSONAccumulator_ParsePath(t *testing.T) {
 	}
 }
 
-func ptrString(s string) *string      { return &s }
-func ptrFloat(f float64) *float64     { return &f }
-func ptrBool(b bool) *bool            { return &b }
-func ptrInt(i int) *int               { return &i }
+func ptrString(s string) *string  { return &s }
+func ptrFloat(f float64) *float64 { return &f }
+func ptrBool(b bool) *bool        { return &b }
+func ptrInt(i int) *int           { return &i }
 func ptrAPIPartial(s string) internal.APIPartialArg {
 	return internal.APIPartialArg{JSONPath: "", StringValue: ptrString(s)}
 }

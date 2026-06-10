@@ -228,7 +228,7 @@ func TestBuildChatRequest_ResponseFormatJSON_Schema(t *testing.T) {
 	p := newTestProvider(t, nil)
 	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
 	schema := map[string]any{
-		"type": "object",
+		"type":       "object",
 		"properties": map[string]any{"x": map[string]any{"type": "string"}},
 	}
 	opts := GenerateOptions{
