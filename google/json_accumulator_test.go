@@ -95,3 +95,33 @@ func TestJSONAccumulator_PushObjectSimple(t *testing.T) {
 		t.Errorf("finalize got %q, want %q", closing, `}`)
 	}
 }
+
+func TestJSONAccumulator_StringContinuation(t *testing.T) {
+	var a GoogleJSONAccumulator
+	out, _ := a.Push(internal.APIPartialArg{
+		JSONPath: "summary", StringValue: ptrString("Hello, "), WillContinue: true,
+	})
+	if out != `{"summary":"Hello, ` {
+		t.Errorf("open got %q, want %q", out, `{"summary":"Hello, `)
+	}
+	out, _ = a.Push(internal.APIPartialArg{
+		JSONPath: "summary", StringValue: ptrString("world!"),
+	})
+	if out != `world!` {
+		t.Errorf("cont got %q, want %q", out, `world!`)
+	}
+	// No third willContinue; the second Push should close the string.
+	closing, _ := a.Finalize()
+	if closing != `"}` {
+		t.Errorf("finalize got %q, want %q", closing, `"}`)
+	}
+}
+
+func TestJSONAccumulator_NoWillContinue(t *testing.T) {
+	var a GoogleJSONAccumulator
+	a.Push(internal.APIPartialArg{JSONPath: "x", StringValue: ptrString("v")})
+	closing, _ := a.Finalize()
+	if closing != `}` {
+		t.Errorf("got %q, want %q", closing, `}`)
+	}
+}

@@ -26,9 +26,122 @@ import (
 // GoogleJSONAccumulator is a single-call scoped JSON builder. Zero value is
 // ready to use.
 type GoogleJSONAccumulator struct {
-	pathStack  []pathEntry
-	stringOpen bool
-	closed     bool
+	pathStack      []pathEntry
+	stringOpen     bool
+	closed         bool
+	accumulated    map[string]any // structured view of the current state
+	hasValue       map[string]bool // path strings that have a set value
+}
+
+func (a *GoogleJSONAccumulator) pathKey(segments []any) string {
+	var b strings.Builder
+	for i, s := range segments {
+		if i > 0 {
+			b.WriteByte('/')
+		}
+		switch v := s.(type) {
+		case string:
+			b.WriteString(v)
+		case int:
+			b.WriteString(strconv.Itoa(v))
+		default:
+			fmt.Fprintf(&b, "?%T", v)
+		}
+	}
+	return b.String()
+}
+
+func (a *GoogleJSONAccumulator) ensureAccumulated() {
+	if a.accumulated == nil {
+		a.accumulated = map[string]any{}
+		a.hasValue = map[string]bool{}
+	}
+}
+
+func (a *GoogleJSONAccumulator) getNested(segments []any) (any, bool) {
+	if a.accumulated == nil {
+		return nil, false
+	}
+	var cur any = a.accumulated
+	for _, seg := range segments {
+		switch v := cur.(type) {
+		case map[string]any:
+			key, ok := seg.(string)
+			if !ok {
+				return nil, false
+			}
+			cur, ok = v[key]
+			if !ok {
+				return nil, false
+			}
+		case []any:
+			idx, ok := seg.(int)
+			if !ok {
+				return nil, false
+			}
+			if idx < 0 || idx >= len(v) {
+				return nil, false
+			}
+			cur = v[idx]
+		default:
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+func (a *GoogleJSONAccumulator) setNested(segments []any, value any) {
+	a.ensureAccumulated()
+	if len(segments) == 0 {
+		return
+	}
+	var cur any = a.accumulated
+	for i, seg := range segments[:len(segments)-1] {
+		switch v := cur.(type) {
+		case map[string]any:
+			key, ok := seg.(string)
+			if !ok {
+				return
+			}
+			nv, exists := v[key]
+			if !exists {
+				nv = map[string]any{}
+				v[key] = nv
+			}
+			cur = nv
+			_ = i
+		case []any:
+			idx, ok := seg.(int)
+			if !ok {
+				return
+			}
+			for len(v) <= idx {
+				v = append(v, map[string]any{})
+			}
+			cur = v[idx]
+		default:
+			return
+		}
+	}
+	last := segments[len(segments)-1]
+	switch v := cur.(type) {
+	case map[string]any:
+		key, ok := last.(string)
+		if !ok {
+			return
+		}
+		v[key] = value
+	case []any:
+		idx, ok := last.(int)
+		if !ok {
+			return
+		}
+		for len(v) <= idx {
+			v = append(v, nil)
+		}
+		v[idx] = value
+	}
+	a.hasValue[a.pathKey(segments)] = true
 }
 
 type pathEntry struct {
@@ -113,6 +226,24 @@ func (a *GoogleJSONAccumulator) Push(arg internal.APIPartialArg) (string, error)
 	if len(segments) == 0 {
 		return "", nil
 	}
+	// String continuation: if a string was started (willContinue=true) and
+	// another string push comes at the same path, append the new value to
+	// the existing string and emit just the escaped text fragment.
+	if arg.StringValue != nil {
+		if existing, ok := a.getNested(segments); ok {
+			if prev, ok := existing.(string); ok {
+				newStr := prev + *arg.StringValue
+				a.setNested(segments, newStr)
+				if arg.WillContinue {
+					a.stringOpen = true
+				}
+				// Emit the escaped text (the part to be appended
+				// between the previously-opened quote and the
+				// eventual close quote).
+				return escapeJSONString(*arg.StringValue), nil
+			}
+		}
+	}
 	var frag strings.Builder
 	if a.stringOpen {
 		frag.WriteByte('"')
@@ -133,6 +264,16 @@ func (a *GoogleJSONAccumulator) Push(arg internal.APIPartialArg) (string, error)
 		return "", err
 	}
 	frag.WriteString(a.emitLeaf(leaf, arg, valueJSON, emitValueJSON))
+	// Track the value for future continuation detection.
+	if err == nil {
+		var v any
+		if arg.StringValue != nil {
+			v = *arg.StringValue
+		} else {
+			v = valueJSON
+		}
+		a.setNested(segments, v)
+	}
 	return frag.String(), nil
 }
 
