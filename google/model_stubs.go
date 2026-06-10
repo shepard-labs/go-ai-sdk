@@ -12,21 +12,6 @@ import (
 	"github.com/shepard-labs/go-ai-sdk/google/tools"
 )
 
-// ---- Video model stub ----
-
-type googleVideoModel struct {
-	provider *googleProvider
-	modelID  string
-}
-
-func (m *googleVideoModel) ModelID() string       { return m.modelID }
-func (m *googleVideoModel) Provider() string      { return m.provider.name + ".video" }
-func (m *googleVideoModel) MaxVideosPerCall() int { return defaultMaxVideosPerCall }
-
-func (m *googleVideoModel) DoGenerate(ctx context.Context, opts VideoGenerateOptions) (*VideoGenerateResult, error) {
-	return nil, UnsupportedFunctionalityError{Functionality: "DoGenerate (video, not yet implemented — see Milestone 7)"}
-}
-
 // ---- Speech model stub ----
 
 type googleSpeechModel struct {
