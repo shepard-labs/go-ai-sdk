@@ -336,3 +336,44 @@ func TestDoStream_StreamRaw(t *testing.T) {
 		t.Errorf("no StreamRaw: %+v", parts)
 	}
 }
+
+func TestDoStream_AbortDuringStream(t *testing.T) {
+	p := newTestProvider(t, newSSEHandler(t, []string{
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"hi"}]}}]}`,
+	}))
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	ctx, cancel := context.WithCancel(context.Background())
+	res, _ := lm.DoStream(ctx, StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
+	cancel()
+	parts := collectStream(t, res.Stream, 1*time.Second)
+	_ = parts
+}
+
+func TestDoStream_MalformedSSE(t *testing.T) {
+	p := newTestProvider(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "data: {not-json}\n\n")
+		flusher, _ := w.(http.Flusher)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = io.WriteString(w, `data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`+"\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	res, _ := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
+	parts := collectStream(t, res.Stream, 2*time.Second)
+	var finish *StreamFinish
+	for _, p := range parts {
+		if v, ok := p.(StreamFinish); ok {
+			f := v
+			finish = &f
+		}
+	}
+	if finish == nil {
+		t.Fatalf("no StreamFinish after malformed chunk: %+v", parts)
+	}
+}
