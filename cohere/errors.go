@@ -74,12 +74,6 @@ func (e TooManyEmbeddingValuesForCallError) Error() string {
 	return fmt.Sprintf("cohere: too many embedding values for provider %s model %s: max %d, got %d", e.Provider, e.ModelID, e.MaxEmbeddingsPerCall, len(e.Values))
 }
 
-type NoSuchModelError struct{ ModelID, ModelType string }
-
-func (e NoSuchModelError) Error() string {
-	return fmt.Sprintf("cohere: no such %s model: %s", e.ModelType, e.ModelID)
-}
-
 func buildAPICallError(resp *http.Response, body []byte, truncated bool) *APICallError {
 	status, headers, requestID := 0, http.Header{}, ""
 	if resp != nil {
