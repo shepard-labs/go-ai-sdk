@@ -2,6 +2,7 @@ package google
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/shepard-labs/go-ai-sdk/google/internal"
@@ -41,6 +42,36 @@ func ptrAPIPartial(s string) internal.APIPartialArg {
 }
 
 var _ = ptrAPIPartial // keep helper available for later tasks
+
+func TestJSONAccumulator_NestedObject(t *testing.T) {
+	var a GoogleJSONAccumulator
+	out, _ := a.Push(internal.APIPartialArg{JSONPath: "user.name", StringValue: ptrString("alice")})
+	if out != `{"user":{"name":"alice"` {
+		t.Errorf("step1 got %q, want %q", out, `{"user":{"name":"alice"`)
+	}
+	out, _ = a.Push(internal.APIPartialArg{JSONPath: "user.age", NumberValue: ptrFloat(30)})
+	if out != `,"age":30` {
+		t.Errorf("step2 got %q, want %q", out, `,"age":30`)
+	}
+	closing, _ := a.Finalize()
+	if closing != `}}` {
+		t.Errorf("finalize got %q, want %q", closing, `}}`)
+	}
+}
+
+func TestJSONAccumulator_ArrayOfObjects(t *testing.T) {
+	var a GoogleJSONAccumulator
+	a.Push(internal.APIPartialArg{JSONPath: "items[0].name", StringValue: ptrString("a")})
+	a.Push(internal.APIPartialArg{JSONPath: "items[0].qty", NumberValue: ptrFloat(1)})
+	out, _ := a.Push(internal.APIPartialArg{JSONPath: "items[1].name", StringValue: ptrString("b")})
+	if !strings.Contains(out, `,{"name":"b"`) {
+		t.Errorf("step3 got %q, want contains %q", out, `,{"name":"b"`)
+	}
+	closing, _ := a.Finalize()
+	if closing != `}]}` {
+		t.Errorf("finalize got %q, want %q", closing, `}]}`)
+	}
+}
 
 func TestJSONAccumulator_PushObjectSimple(t *testing.T) {
 	var a GoogleJSONAccumulator
