@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/shepard-labs/go-ai-sdk/google/tools"
 	"github.com/shepard-labs/go-ai-sdk/openaicompatible"
 )
 
@@ -835,34 +836,19 @@ func (StreamError) IsStreamPart()            {}
 func (StreamRaw) IsStreamPart()              {}
 
 // ---- Provider-tool argument types ----
+// Types are aliases of the tools subpackage types to keep a single vocabulary
+// for callers. The tools package defines them to avoid an import cycle.
 
-// GoogleSearchArgs carries optional arguments for the googleSearch provider tool.
-type GoogleSearchArgs struct {
-	SearchTypes     *GoogleSearchTypes
-	TimeRangeFilter *TimeRangeFilter
-}
+type GoogleSearchArgs = tools.GoogleSearchArgs
 
 // GoogleSearchTypes specifies which search types to enable.
-type GoogleSearchTypes struct {
-	WebSearch   map[string]any
-	ImageSearch map[string]any
-}
+type GoogleSearchTypes = tools.GoogleSearchTypes
 
 // TimeRangeFilter restricts search results to a time range (RFC 3339 strings).
-type TimeRangeFilter struct {
-	StartTime string
-	EndTime   string
-}
+type TimeRangeFilter = tools.TimeRangeFilter
 
 // FileSearchArgs carries arguments for the fileSearch provider tool.
-type FileSearchArgs struct {
-	FileSearchStoreNames []string
-	TopK                 *int
-	MetadataFilter       string
-}
+type FileSearchArgs = tools.FileSearchArgs
 
 // VertexRagStoreArgs carries arguments for the vertexRagStore provider tool.
-type VertexRagStoreArgs struct {
-	RagCorpus string // "projects/{p}/locations/{l}/ragCorpora/{c}"
-	TopK      *int
-}
+type VertexRagStoreArgs = tools.VertexRagStoreArgs

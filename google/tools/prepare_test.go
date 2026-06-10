@@ -292,3 +292,188 @@ func TestPrepareTools_JSONMarshalStable(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+
+// ---- Tool factory output tests ----
+
+func TestTools_GoogleSearch_Default(t *testing.T) {
+	got := tools.GoogleSearch()
+	if got.ID != "google.google_search" {
+		t.Errorf("ID = %q, want google.google_search", got.ID)
+	}
+	if got.Name != "google_search" {
+		t.Errorf("Name = %q, want google_search", got.Name)
+	}
+	if got.Type != "provider" {
+		t.Errorf("Type = %q, want provider", got.Type)
+	}
+	if got.ArgsSchema != nil {
+		t.Errorf("ArgsSchema = %v, want nil", got.ArgsSchema)
+	}
+}
+
+func TestTools_GoogleSearch_WithArgs(t *testing.T) {
+	ts := &GoogleSearchTypes{WebSearch: map[string]any{"mode": "MODE_UNSPECIFIED"}}
+	tr := &TimeRangeFilter{StartTime: "2024-01-01T00:00:00Z"}
+	got := tools.GoogleSearch(GoogleSearchArgs{SearchTypes: ts, TimeRangeFilter: tr})
+	if got.ID != "google.google_search" {
+		t.Errorf("ID = %q", got.ID)
+	}
+	args, ok := got.ArgsSchema.(GoogleSearchArgs)
+	if !ok {
+		t.Fatalf("ArgsSchema type = %T, want GoogleSearchArgs", got.ArgsSchema)
+	}
+	if args.SearchTypes == nil || args.SearchTypes.WebSearch == nil {
+		t.Errorf("SearchTypes missing")
+	}
+	if args.TimeRangeFilter == nil {
+		t.Errorf("TimeRangeFilter missing")
+	}
+}
+
+func TestTools_EnterpriseWebSearch(t *testing.T) {
+	got := tools.EnterpriseWebSearch()
+	if got.ID != "google.enterprise_web_search" {
+		t.Errorf("ID = %q, want google.enterprise_web_search", got.ID)
+	}
+	if got.Name != "enterprise_web_search" {
+		t.Errorf("Name = %q, want enterprise_web_search", got.Name)
+	}
+	if got.Type != "provider" {
+		t.Errorf("Type = %q, want provider", got.Type)
+	}
+	if got.ArgsSchema != nil {
+		t.Errorf("ArgsSchema = %v, want nil", got.ArgsSchema)
+	}
+}
+
+func TestTools_GoogleMaps(t *testing.T) {
+	got := tools.GoogleMaps()
+	if got.ID != "google.google_maps" {
+		t.Errorf("ID = %q, want google.google_maps", got.ID)
+	}
+	if got.Name != "google_maps" {
+		t.Errorf("Name = %q, want google_maps", got.Name)
+	}
+	if got.Type != "provider" {
+		t.Errorf("Type = %q, want provider", got.Type)
+	}
+}
+
+func TestTools_UrlContext(t *testing.T) {
+	got := tools.UrlContext()
+	if got.ID != "google.url_context" {
+		t.Errorf("ID = %q, want google.url_context", got.ID)
+	}
+	if got.Name != "url_context" {
+		t.Errorf("Name = %q, want url_context", got.Name)
+	}
+	if got.Type != "provider" {
+		t.Errorf("Type = %q, want provider", got.Type)
+	}
+}
+
+func TestTools_FileSearch_Default(t *testing.T) {
+	got := tools.FileSearch(FileSearchArgs{})
+	if got.ID != "google.file_search" {
+		t.Errorf("ID = %q, want google.file_search", got.ID)
+	}
+	if got.Name != "file_search" {
+		t.Errorf("Name = %q, want file_search", got.Name)
+	}
+	if got.Type != "provider" {
+		t.Errorf("Type = %q, want provider", got.Type)
+	}
+}
+
+func TestTools_FileSearch_WithArgs(t *testing.T) {
+	k := 10
+	got := tools.FileSearch(FileSearchArgs{
+		FileSearchStoreNames: []string{"store-a", "store-b"},
+		TopK:                &k,
+		MetadataFilter:      "key=value",
+	})
+	args, ok := got.ArgsSchema.(FileSearchArgs)
+	if !ok {
+		t.Fatalf("ArgsSchema type = %T, want FileSearchArgs", got.ArgsSchema)
+	}
+	if len(args.FileSearchStoreNames) != 2 {
+		t.Errorf("FileSearchStoreNames = %v, want 2 entries", args.FileSearchStoreNames)
+	}
+	if args.TopK == nil || *args.TopK != 10 {
+		t.Errorf("TopK = %v", args.TopK)
+	}
+	if args.MetadataFilter != "key=value" {
+		t.Errorf("MetadataFilter = %q", args.MetadataFilter)
+	}
+}
+
+func TestTools_CodeExecution(t *testing.T) {
+	got := tools.CodeExecution()
+	if got.ID != "google.code_execution" {
+		t.Errorf("ID = %q, want google.code_execution", got.ID)
+	}
+	if got.Name != "code_execution" {
+		t.Errorf("Name = %q, want code_execution", got.Name)
+	}
+	if got.Type != "provider" {
+		t.Errorf("Type = %q, want provider", got.Type)
+	}
+}
+
+func TestTools_VertexRagStore_Default(t *testing.T) {
+	got := tools.VertexRagStore(VertexRagStoreArgs{})
+	if got.ID != "google.vertex_rag_store" {
+		t.Errorf("ID = %q, want google.vertex_rag_store", got.ID)
+	}
+	if got.Name != "vertex_rag_store" {
+		t.Errorf("Name = %q, want vertex_rag_store", got.Name)
+	}
+	if got.Type != "provider" {
+		t.Errorf("Type = %q, want provider", got.Type)
+	}
+}
+
+func TestTools_VertexRagStore_WithArgs(t *testing.T) {
+	k := 5
+	got := tools.VertexRagStore(VertexRagStoreArgs{
+		RagCorpus: "projects/p/locations/l/ragCorpora/c",
+		TopK:      &k,
+	})
+	args, ok := got.ArgsSchema.(VertexRagStoreArgs)
+	if !ok {
+		t.Fatalf("ArgsSchema type = %T, want VertexRagStoreArgs", got.ArgsSchema)
+	}
+	if args.RagCorpus != "projects/p/locations/l/ragCorpora/c" {
+		t.Errorf("RagCorpus = %q", args.RagCorpus)
+	}
+	if args.TopK == nil || *args.TopK != 5 {
+		t.Errorf("TopK = %v", args.TopK)
+	}
+}
+
+func TestTools_Build(t *testing.T) {
+	tf := tools.Build()
+	// Verify each factory is non-nil and returns the correct tool.
+	if got := tf.GoogleSearch(); got.ID != "google.google_search" {
+		t.Errorf("GoogleSearch: ID = %q", got.ID)
+	}
+	if got := tf.EnterpriseWebSearch(); got.ID != "google.enterprise_web_search" {
+		t.Errorf("EnterpriseWebSearch: ID = %q", got.ID)
+	}
+	if got := tf.GoogleMaps(); got.ID != "google.google_maps" {
+		t.Errorf("GoogleMaps: ID = %q", got.ID)
+	}
+	if got := tf.UrlContext(); got.ID != "google.url_context" {
+		t.Errorf("UrlContext: ID = %q", got.ID)
+	}
+	if got := tf.FileSearch(FileSearchArgs{}); got.ID != "google.file_search" {
+		t.Errorf("FileSearch: ID = %q", got.ID)
+	}
+	if got := tf.CodeExecution(); got.ID != "google.code_execution" {
+		t.Errorf("CodeExecution: ID = %q", got.ID)
+	}
+	if got := tf.VertexRagStore(VertexRagStoreArgs{}); got.ID != "google.vertex_rag_store" {
+		t.Errorf("VertexRagStore: ID = %q", got.ID)
+	}
+}

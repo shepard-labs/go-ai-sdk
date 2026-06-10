@@ -363,3 +363,93 @@ func fillFileSearchArgs(args FileSearchArgs) map[string]any {
 	}
 	return out
 }
+
+// ---- Tool factory set ----
+
+// Tool mirrors [google.Tool] for use within this subpackage.
+// Defined locally to avoid an import cycle: google imports tools, so tools
+// cannot import google directly.
+type Tool struct {
+	ID               string
+	Name             string
+	Type             string
+	ArgsSchema       any
+	InputSchema      any
+	Strict           *bool
+	ProviderExecuted bool
+	Dynamic          bool
+}
+
+// ToolFactories mirrors [google.ToolFactories] for use within this subpackage.
+// Defined locally to avoid an import cycle.
+type ToolFactories struct {
+	GoogleSearch       func(args ...GoogleSearchArgs) Tool
+	EnterpriseWebSearch func() Tool
+	GoogleMaps         func() Tool
+	UrlContext         func() Tool
+	FileSearch         func(args FileSearchArgs) Tool
+	CodeExecution      func() Tool
+	VertexRagStore     func(args VertexRagStoreArgs) Tool
+}
+
+// Tools holds the Google provider-tool factory set.
+type Tools struct{}
+
+// GoogleSearch returns a google_search tool, optionally configured with args.
+func (Tools) GoogleSearch(args ...GoogleSearchArgs) Tool {
+	a := any(nil)
+	if len(args) > 0 {
+		a = args[0]
+	}
+	return buildTool("google.google_search", "google_search", a)
+}
+
+// EnterpriseWebSearch returns an enterprise_web_search tool.
+func (Tools) EnterpriseWebSearch() Tool {
+	return buildTool("google.enterprise_web_search", "enterprise_web_search", nil)
+}
+
+// GoogleMaps returns a google_maps tool.
+func (Tools) GoogleMaps() Tool {
+	return buildTool("google.google_maps", "google_maps", nil)
+}
+
+// UrlContext returns a url_context tool.
+func (Tools) UrlContext() Tool {
+	return buildTool("google.url_context", "url_context", nil)
+}
+
+// FileSearch returns a file_search tool, optionally configured with args.
+func (Tools) FileSearch(args FileSearchArgs) Tool {
+	return buildTool("google.file_search", "file_search", args)
+}
+
+// CodeExecution returns a code_execution tool.
+func (Tools) CodeExecution() Tool {
+	return buildTool("google.code_execution", "code_execution", nil)
+}
+
+// VertexRagStore returns a vertex_rag_store tool, optionally configured with args.
+func (Tools) VertexRagStore(args VertexRagStoreArgs) Tool {
+	return buildTool("google.vertex_rag_store", "vertex_rag_store", args)
+}
+
+// Build returns the full ToolFactories from the default Tools instance.
+func (Tools) Build() ToolFactories {
+	return ToolFactories{
+		GoogleSearch:       func(args ...GoogleSearchArgs) Tool { return tools.GoogleSearch(args...) },
+		EnterpriseWebSearch: func() Tool { return tools.EnterpriseWebSearch() },
+		GoogleMaps:         func() Tool { return tools.GoogleMaps() },
+		UrlContext:         func() Tool { return tools.UrlContext() },
+		FileSearch:         func(args FileSearchArgs) Tool { return tools.FileSearch(args) },
+		CodeExecution:      func() Tool { return tools.CodeExecution() },
+		VertexRagStore:     func(args VertexRagStoreArgs) Tool { return tools.VertexRagStore(args) },
+	}
+}
+
+// tools is the default Tools instance.
+var tools = Tools{}
+
+func buildTool(id, name string, argsSchema any) Tool {
+	return Tool{ID: id, Name: name, Type: "provider", ArgsSchema: argsSchema}
+}

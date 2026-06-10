@@ -6,7 +6,11 @@ package google
 // image.go (Milestone 3). The other model structs are stubs for later
 // milestones; they return UnsupportedFunctionalityError until implemented.
 
-import "context"
+import (
+	"context"
+
+	"github.com/shepard-labs/go-ai-sdk/google/tools"
+)
 
 // ---- Video model stub ----
 
@@ -47,37 +51,46 @@ func (f *googleFiles) Upload(ctx context.Context, data []byte, opts FilesUploadO
 	return nil, UnsupportedFunctionalityError{Functionality: "Upload (not yet implemented — see Milestone 9)"}
 }
 
-// ---- Tool factories stub ----
-
-// buildToolFactories returns the set of provider-tool factory functions.
-// Full implementations are added in Milestone 6; for now each factory is a
-// minimal stub that returns the correct Tool shape.
+// buildToolFactories returns the Google provider-tool factories.
+// tools.Build() returns tools.ToolFactories (local types, avoids import cycle).
+// This function adapts it to google.ToolFactories.
 func buildToolFactories() ToolFactories {
+	tf := tools.Tools{}
 	return ToolFactories{
 		GoogleSearch: func(args ...GoogleSearchArgs) Tool {
-			var a any
-			if len(args) > 0 {
-				a = args[0]
-			}
-			return Tool{Type: "provider", ID: "google.google_search", Name: "google_search", ArgsSchema: a}
+			return convertTool(tf.GoogleSearch(args...))
 		},
 		EnterpriseWebSearch: func() Tool {
-			return Tool{Type: "provider", ID: "google.enterprise_web_search", Name: "enterprise_web_search"}
+			return convertTool(tf.EnterpriseWebSearch())
 		},
 		GoogleMaps: func() Tool {
-			return Tool{Type: "provider", ID: "google.google_maps", Name: "google_maps"}
+			return convertTool(tf.GoogleMaps())
 		},
 		UrlContext: func() Tool {
-			return Tool{Type: "provider", ID: "google.url_context", Name: "url_context"}
+			return convertTool(tf.UrlContext())
 		},
 		FileSearch: func(args FileSearchArgs) Tool {
-			return Tool{Type: "provider", ID: "google.file_search", Name: "file_search", ArgsSchema: args}
+			return convertTool(tf.FileSearch(args))
 		},
 		CodeExecution: func() Tool {
-			return Tool{Type: "provider", ID: "google.code_execution", Name: "code_execution"}
+			return convertTool(tf.CodeExecution())
 		},
 		VertexRagStore: func(args VertexRagStoreArgs) Tool {
-			return Tool{Type: "provider", ID: "google.vertex_rag_store", Name: "vertex_rag_store", ArgsSchema: args}
+			return convertTool(tf.VertexRagStore(args))
 		},
+	}
+}
+
+// convertTool converts a tools.Tool to a google.Tool.
+func convertTool(t tools.Tool) Tool {
+	return Tool{
+		ID:               t.ID,
+		Name:             t.Name,
+		Type:             t.Type,
+		ArgsSchema:       t.ArgsSchema,
+		InputSchema:      t.InputSchema,
+		Strict:           t.Strict,
+		ProviderExecuted: t.ProviderExecuted,
+		Dynamic:          t.Dynamic,
 	}
 }
