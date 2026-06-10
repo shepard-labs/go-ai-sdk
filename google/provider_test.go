@@ -396,12 +396,6 @@ func TestStubs_ReturnUnsupportedError(t *testing.T) {
 	if !errors.As(err, &uf) {
 		t.Errorf("DoStream: got %T (%v), want UnsupportedFunctionalityError", err, err)
 	}
-
-	em := p.EmbeddingModel("gemini-embedding-001")
-	_, err = em.DoEmbed(nil, EmbedOptions{})
-	if !errors.As(err, &uf) {
-		t.Errorf("DoEmbed: got %T (%v), want UnsupportedFunctionalityError", err, err)
-	}
 }
 
 // TestRetryOptions_Defaults verifies the default retry configuration.

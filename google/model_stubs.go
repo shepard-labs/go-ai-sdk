@@ -1,8 +1,8 @@
 package google
 
 // model_stubs.go defines the concrete model structs and wires them to the
-// model interfaces. Each struct's DoGenerate / DoStream / DoEmbed method
-// returns UnsupportedFunctionalityError for milestones that have not yet been
+// model interfaces. Each struct's DoGenerate / DoStream method returns
+// UnsupportedFunctionalityError for milestones that have not yet been
 // implemented. Real implementations replace these stubs in later milestones.
 
 import (
@@ -30,24 +30,6 @@ func (m *googleLanguageModel) DoGenerate(ctx context.Context, opts GenerateOptio
 
 func (m *googleLanguageModel) DoStream(ctx context.Context, opts StreamOptions) (*StreamResult, error) {
 	return nil, UnsupportedFunctionalityError{Functionality: "DoStream (not yet implemented — see Milestone 5)"}
-}
-
-// ---- Embedding model stub ----
-
-type googleEmbeddingModel struct {
-	provider *googleProvider
-	modelID  string
-}
-
-func (m *googleEmbeddingModel) ModelID() string           { return m.modelID }
-func (m *googleEmbeddingModel) Provider() string          { return m.provider.name + ".embedding" }
-func (m *googleEmbeddingModel) MaxEmbeddingsPerCall() int { return m.provider.maxEmbeddingsPerCall }
-func (m *googleEmbeddingModel) SupportsParallelCalls() bool {
-	return m.provider.supportsParallelEmbeddingCalls
-}
-
-func (m *googleEmbeddingModel) DoEmbed(ctx context.Context, opts EmbedOptions) (*EmbedResult, error) {
-	return nil, UnsupportedFunctionalityError{Functionality: "DoEmbed (not yet implemented — see Milestone 2)"}
 }
 
 // ---- Image model stub ----
