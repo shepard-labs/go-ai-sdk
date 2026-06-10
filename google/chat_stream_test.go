@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -307,5 +308,31 @@ func TestDoStream_Sources(t *testing.T) {
 	}
 	if urls["https://a.example"] != 1 {
 		t.Errorf("dedup failed: %+v", urls)
+	}
+}
+
+func TestDoStream_StreamRaw(t *testing.T) {
+	raw := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP"}]}`
+	p := newTestProvider(t, newSSEHandler(t, []string{raw}))
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	res, _ := lm.DoStream(context.Background(), StreamOptions{
+		IncludeRawChunks: true,
+		GenerateOptions:  GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}},
+	})
+	parts := collectStream(t, res.Stream, 2*time.Second)
+	sawRaw := false
+	for _, p := range parts {
+		if v, ok := p.(StreamRaw); ok {
+			sawRaw = true
+			if !strings.Contains(string(v.Raw), "STOP") {
+				t.Errorf("raw missing STOP: %q", v.Raw)
+			}
+			if v.Decoded == nil {
+				t.Errorf("raw.Decoded is nil")
+			}
+		}
+	}
+	if !sawRaw {
+		t.Errorf("no StreamRaw: %+v", parts)
 	}
 }
