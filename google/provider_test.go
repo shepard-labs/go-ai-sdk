@@ -376,19 +376,15 @@ func TestProviderName(t *testing.T) {
 	}
 }
 
-// TestStubs_ReturnUnsupportedError verifies that stub methods (image /
-// video / speech / files) return UnsupportedFunctionalityError (not nil,
-// not a different error type). DoStream is implemented in M5.
+// TestStubs_ReturnUnsupportedError verifies that stub methods (files) return
+// UnsupportedFunctionalityError (not nil, not a different error type).
+// Speech was implemented in M8; Files remains a stub.
 func TestStubs_ReturnUnsupportedError(t *testing.T) {
 	t.Setenv("GOOGLE_GENERATIVE_AI_API_KEY", "test-key")
 	p := CreateGoogle(ProviderSettings{})
 
 	var uf UnsupportedFunctionalityError
 
-	// Other model families are still stubs in M5.
-	if _, err := p.SpeechModel("gemini-2.5-flash-preview-tts").(*googleSpeechModel).DoGenerate(nil, SpeechGenerateOptions{}); !errors.As(err, &uf) {
-		t.Errorf("speech DoGenerate: got %T (%v), want UnsupportedFunctionalityError", err, err)
-	}
 	if _, err := p.Files().(*googleFiles).Upload(nil, nil, FilesUploadOptions{}); !errors.As(err, &uf) {
 		t.Errorf("files Upload: got %T (%v), want UnsupportedFunctionalityError", err, err)
 	}

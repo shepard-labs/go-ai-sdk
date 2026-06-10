@@ -12,20 +12,6 @@ import (
 	"github.com/shepard-labs/go-ai-sdk/google/tools"
 )
 
-// ---- Speech model stub ----
-
-type googleSpeechModel struct {
-	provider *googleProvider
-	modelID  string
-}
-
-func (m *googleSpeechModel) ModelID() string  { return m.modelID }
-func (m *googleSpeechModel) Provider() string { return m.provider.name + ".speech" }
-
-func (m *googleSpeechModel) DoGenerate(ctx context.Context, opts SpeechGenerateOptions) (*SpeechGenerateResult, error) {
-	return nil, UnsupportedFunctionalityError{Functionality: "DoGenerate (speech, not yet implemented — see Milestone 8)"}
-}
-
 // ---- Files stub ----
 
 type googleFiles struct {

@@ -87,22 +87,6 @@ type SpeechModelOptions struct {
 	MultiSpeakerVoiceConfig *MultiSpeakerVoiceConfig
 }
 
-// MultiSpeakerVoiceConfig configures a multi-speaker TTS voice.
-type MultiSpeakerVoiceConfig struct {
-	SpeakerVoiceConfigs []SpeakerVoiceConfig
-}
-
-// SpeakerVoiceConfig binds a speaker label to a voice.
-type SpeakerVoiceConfig struct {
-	Speaker     string
-	VoiceConfig PrebuiltVoiceConfig
-}
-
-// PrebuiltVoiceConfig names a prebuilt TTS voice.
-type PrebuiltVoiceConfig struct {
-	VoiceName string
-}
-
 // EmbeddingModelOptions is the recognized typed view of google EmbeddingModel
 // ProviderOptions.
 type EmbeddingModelOptions struct {

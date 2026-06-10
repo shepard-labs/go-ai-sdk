@@ -657,6 +657,27 @@ type SpeechGenerateResult struct {
 	Response         ResponseMetadata
 }
 
+// GoogleSpeechModelOptions carries provider-specific options for speech models.
+type GoogleSpeechModelOptions struct {
+	MultiSpeakerVoiceConfig *MultiSpeakerVoiceConfig
+}
+
+// MultiSpeakerVoiceConfig configures a multi-speaker TTS voice.
+type MultiSpeakerVoiceConfig struct {
+	SpeakerVoiceConfigs []SpeakerVoiceConfig
+}
+
+// SpeakerVoiceConfig binds a speaker label to a voice.
+type SpeakerVoiceConfig struct {
+	Speaker     string
+	VoiceConfig PrebuiltVoiceConfig
+}
+
+// PrebuiltVoiceConfig names a prebuilt TTS voice.
+type PrebuiltVoiceConfig struct {
+	VoiceName string
+}
+
 // ---- Files types ----
 
 // FilesUploadOptions carries parameters for a Files API upload.

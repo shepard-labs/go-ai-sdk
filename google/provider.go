@@ -85,6 +85,7 @@ type googleProvider struct {
 	isVertex                       bool // true when baseURL targets aiplatform.googleapis.com
 	useVertexAIHeaders             bool
 	errorStructure                 ProviderErrorStructure
+	apiKey                         string
 	err                            error
 }
 
@@ -126,6 +127,7 @@ func CreateGoogle(settings ProviderSettings) Provider {
 		isVertex:                       isVertexProvider(baseURL, settings.UseVertexAIHeaders),
 		useVertexAIHeaders:             settings.UseVertexAIHeaders,
 		errorStructure:                 settings.ErrorStructure,
+		apiKey:                         apiKey,
 	}
 
 	if p.logger == nil {
