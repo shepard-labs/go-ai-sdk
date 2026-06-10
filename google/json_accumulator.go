@@ -91,5 +91,193 @@ func (a *GoogleJSONAccumulator) parsePath(path string) ([]any, error) {
 	return out, nil
 }
 
-// _ = internal.APIPartialArg{}  // ensure the import is used once Push lands below.
-var _ = internal.APIPartialArg{}
+// Push consumes a single partial-args entry and returns the JSON text
+
+// Push consumes a single partial-args entry and returns the JSON text
+// fragment to append to the call's input. Callers should concatenate each
+// returned fragment in order. Once WillContinue=false has been received
+// for a string (or no string was ever opened), Finalize must be called to
+// emit the closing characters.
+func (a *GoogleJSONAccumulator) Push(arg internal.APIPartialArg) (string, error) {
+	if a.closed {
+		return "", fmt.Errorf("google: Push after Finalize")
+	}
+	path, err := a.parsePath(arg.JSONPath)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if err := a.openPath(path, &b); err != nil {
+		return "", err
+	}
+	if err := a.emitValue(arg, &b); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+// openPath walks the existing stack and pushes new entries for any path
+// segments that exceed the current depth. Each new entry emits its opening
+// character and (for objects) its key+colon prefix. Existing entries must
+// be consistent with the incoming path.
+func (a *GoogleJSONAccumulator) openPath(path []any, b *strings.Builder) error {
+	for i, seg := range path {
+		if i < len(a.stack) {
+			existing := a.stack[i]
+			switch v := seg.(type) {
+			case string:
+				if existing.isArray {
+					return fmt.Errorf("google: expected object key, got array index at depth %d", i)
+				}
+				if existing.segment != v {
+					return fmt.Errorf("google: path mismatch at depth %d (have %q, want %q)", i, existing.segment, v)
+				}
+			case int:
+				if !existing.isArray {
+					return fmt.Errorf("google: expected object, got array index at depth %d", i)
+				}
+				_ = v
+			}
+			continue
+		}
+		// New container.
+		isArray := false
+		var segment string
+		switch v := seg.(type) {
+		case string:
+			segment = v
+		case int:
+			isArray = true
+		default:
+			return fmt.Errorf("google: unsupported path segment type %T", v)
+		}
+		a.stack = append(a.stack, stackEntry{segment: segment, isArray: isArray})
+		if isArray {
+			b.WriteByte('[')
+		} else {
+			b.WriteByte('{')
+			if segment != "" {
+				b.WriteByte('"')
+				b.WriteString(escapeJSONString(segment))
+				b.WriteByte('"')
+				b.WriteByte(':')
+			}
+		}
+	}
+	return nil
+}
+
+// emitValue writes the value portion of a partialArg to b and updates the
+// current container's child count.
+func (a *GoogleJSONAccumulator) emitValue(arg internal.APIPartialArg, b *strings.Builder) error {
+	switch {
+	case arg.StringValue != nil:
+		if a.stringOpen {
+			return fmt.Errorf("google: nested string open")
+		}
+		if sep := a.childSeparator(); sep != "" {
+			b.WriteString(sep)
+		}
+		b.WriteByte('"')
+		b.WriteString(escapeJSONString(*arg.StringValue))
+		if arg.WillContinue {
+			a.stringOpen = true
+			// Don't close the string yet.
+		} else {
+			b.WriteByte('"')
+		}
+		a.bumpChild()
+	case arg.NumberValue != nil:
+		if sep := a.childSeparator(); sep != "" {
+			b.WriteString(sep)
+		}
+		b.WriteString(strconv.FormatFloat(*arg.NumberValue, 'f', -1, 64))
+		a.bumpChild()
+	case arg.BoolValue != nil:
+		if sep := a.childSeparator(); sep != "" {
+			b.WriteString(sep)
+		}
+		if *arg.BoolValue {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+		a.bumpChild()
+	case arg.NullValue != nil:
+		if sep := a.childSeparator(); sep != "" {
+			b.WriteString(sep)
+		}
+		b.WriteString("null")
+		a.bumpChild()
+	default:
+		return fmt.Errorf("google: partialArg has no value field")
+	}
+	return nil
+}
+
+func (a *GoogleJSONAccumulator) childSeparator() string {
+	if len(a.stack) == 0 {
+		return ""
+	}
+	top := &a.stack[len(a.stack)-1]
+	if top.childCount == 0 {
+		return ""
+	}
+	return ","
+}
+
+func (a *GoogleJSONAccumulator) bumpChild() {
+	if len(a.stack) == 0 {
+		return
+	}
+	a.stack[len(a.stack)-1].childCount++
+}
+
+// Finalize emits any remaining closing characters. If WillContinue=true was
+// never seen, Finalize returns "}" so the call's input is at least "{}".
+// After Finalize the accumulator must not be used again.
+func (a *GoogleJSONAccumulator) Finalize() (string, error) {
+	if a.closed {
+		return "", nil
+	}
+	a.closed = true
+	var b strings.Builder
+	if a.stringOpen {
+		b.WriteByte('"')
+		a.stringOpen = false
+	}
+	for i := len(a.stack) - 1; i >= 0; i-- {
+		entry := a.stack[i]
+		if entry.isArray {
+			b.WriteByte(']')
+		} else {
+			b.WriteByte('}')
+		}
+	}
+	return b.String(), nil
+}
+
+func escapeJSONString(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}

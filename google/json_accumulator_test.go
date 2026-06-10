@@ -41,3 +41,26 @@ func ptrAPIPartial(s string) internal.APIPartialArg {
 }
 
 var _ = ptrAPIPartial // keep helper available for later tasks
+
+func TestJSONAccumulator_PushObjectSimple(t *testing.T) {
+	var a GoogleJSONAccumulator
+	out, err := a.Push(internal.APIPartialArg{
+		JSONPath:    "name",
+		StringValue: ptrString("hello"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != `{"name":"hello"` {
+		t.Errorf("push got %q, want %q", out, `{"name":"hello"`)
+	}
+	closing, err := a.Finalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// String was closed inline by the Push, so Finalize just closes the
+	// outer object.
+	if closing != `}` {
+		t.Errorf("finalize got %q, want %q", closing, `}`)
+	}
+}
