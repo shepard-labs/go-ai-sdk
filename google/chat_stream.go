@@ -370,7 +370,7 @@ func (s *chatStreamState) extractAndEmitSources(parts chan<- StreamPart, gm *int
 }
 
 // flushStreamState closes any still-open text/reasoning/tool blocks at
-// the end of the stream.
+// the end of the stream and emits any deferred tool calls.
 func (s *chatStreamState) flushStreamState(parts chan<- StreamPart) {
 	if s.reasoningOpen {
 		parts <- StreamReasoningEnd{ID: s.reasoningID}
@@ -380,11 +380,49 @@ func (s *chatStreamState) flushStreamState(parts chan<- StreamPart) {
 		parts <- StreamTextEnd{ID: s.textID}
 		s.textOpen = false
 	}
-	for id, st := range s.toolState {
+	for _, st := range s.toolState {
 		if st.HasStarted && !st.HasEnded {
-			parts <- StreamToolInputEnd{ID: id}
+			parts <- StreamToolInputEnd{ID: st.ID}
 			st.HasEnded = true
 		}
+	}
+	// Emit any deferred tool calls. For streaming-chunk calls the
+	// Input must include the accumulator's closing characters.
+	for _, st := range s.toolState {
+		if st.Emitted {
+			continue
+		}
+		if !st.HasStarted {
+			continue
+		}
+		var input json.RawMessage
+		if st.Accumulator != nil {
+			closing, err := st.Accumulator.Finalize()
+			if err == nil && closing != "" {
+				st.AccruedArgs = append(st.AccruedArgs, closing...)
+			}
+			if len(st.AccruedArgs) > 0 {
+				input = st.AccruedArgs
+			} else {
+				input = json.RawMessage("{}")
+			}
+		} else {
+			if len(st.AccruedArgs) > 0 {
+				input = st.AccruedArgs
+			} else {
+				input = json.RawMessage("{}")
+			}
+		}
+		pm := providerMetadataWithSig(s.model.provider.name, st.ThoughtSignature)
+		parts <- StreamToolCall{ToolCall: ToolCallContent{
+			ToolCallID:       st.ID,
+			ToolName:         st.ToolName,
+			Input:            input,
+			ProviderExecuted: st.ProviderExecuted,
+			Dynamic:          st.Dynamic,
+			ProviderMetadata: pm,
+		}}
+		st.Emitted = true
 	}
 }
 
@@ -413,6 +451,7 @@ func (m *googleLanguageModel) handleCodeExecutionStart(parts chan<- StreamPart, 
 		HasStarted:       true,
 	}
 	state.lastCodeExecID = id
+	state.toolState[id].Emitted = true
 	parts <- StreamToolCall{ToolCall: ToolCallContent{
 		ToolCallID:       id,
 		ToolName:         "code_execution",
@@ -441,15 +480,94 @@ func (m *googleLanguageModel) handleCodeExecutionResult(parts chan<- StreamPart,
 }
 
 func (m *googleLanguageModel) handleFunctionCall(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
-	_ = parts
-	_ = p
-	_ = state
+	if p.FunctionCall == nil {
+		return
+	}
+	fc := p.FunctionCall
+	id := fc.ID
+	if id == "" {
+		id = m.provider.generateID()
+	}
+	st, exists := state.toolState[id]
+	if !exists {
+		st = &streamToolState{
+			ID:               id,
+			ToolName:         fc.Name,
+			ProviderExecuted: false,
+			ThoughtSignature: p.ThoughtSignature,
+		}
+		state.toolState[id] = st
+	}
+	// Streaming chunk path: partialArgs present, or willContinue=true.
+	if len(fc.PartialArgs) > 0 || (fc.WillContinue != nil && *fc.WillContinue) {
+		m.handleFunctionCallStreamingChunk(parts, fc, st, state)
+		return
+	}
+	// Complete call path: no partialArgs, no willContinue.
+	if !st.HasStarted {
+		st.HasStarted = true
+		parts <- StreamToolInputStart{ID: id, ToolName: fc.Name}
+	}
+	if len(fc.Args) > 0 {
+		st.AccruedArgs = append(st.AccruedArgs, fc.Args...)
+		parts <- StreamToolInputDelta{ID: id, Delta: string(fc.Args)}
+	}
+	if !st.HasEnded {
+		parts <- StreamToolInputEnd{ID: id}
+		st.HasEnded = true
+	}
+	// StreamToolCall is emitted by flushStreamState so the Input field
+	// can include the accumulator's closing characters.
+}
+
+// handleFunctionCallStreamingChunk processes the accumulator path for
+// client-side function calls that arrive with partialArgs.
+func (m *googleLanguageModel) handleFunctionCallStreamingChunk(parts chan<- StreamPart, fc *internal.APIFunctionCall, st *streamToolState, state *chatStreamState) {
+	if st.Accumulator == nil {
+		st.Accumulator = &GoogleJSONAccumulator{}
+	}
+	if !st.HasStarted {
+		st.HasStarted = true
+		parts <- StreamToolInputStart{ID: st.ID, ToolName: st.ToolName}
+	}
+	for i := range fc.PartialArgs {
+		arg := fc.PartialArgs[i]
+		frag, err := st.Accumulator.Push(arg)
+		if err != nil {
+			state.warnings = append(state.warnings, Warning{Type: "other", Feature: "partial-args", Message: err.Error()})
+			continue
+		}
+		if frag != "" {
+			st.AccruedArgs = append(st.AccruedArgs, frag...)
+			parts <- StreamToolInputDelta{ID: st.ID, Delta: frag}
+		}
+	}
+	willContinue := fc.WillContinue != nil && *fc.WillContinue
+	if willContinue {
+		// Stream continues; do not emit End yet.
+		return
+	}
+	// Stream is done — close the input stream but DEFER the tool call
+	// emission until flushStreamState so the Input field can include
+	// the accumulator's closing characters (which are only known after
+	// Finalize).
+	if !st.HasEnded {
+		parts <- StreamToolInputEnd{ID: st.ID}
+		st.HasEnded = true
+	}
 }
 
 func (m *googleLanguageModel) handleFunctionResponse(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
 	_ = parts
 	_ = p
 	_ = state
+}
+
+func providerMetadataWithSig(name, sig string) ProviderMetadata {
+	if sig == "" {
+		return nil
+	}
+	return ProviderMetadata{name: map[string]any{"thoughtSignature": sig}}
 }
 
 func (m *googleLanguageModel) handleServerToolCall(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {

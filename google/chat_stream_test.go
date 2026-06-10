@@ -154,3 +154,99 @@ func TestDoStream_CodeExecution(t *testing.T) {
 		t.Errorf("result id %q != call id %q", toolResult.ToolResult.ToolCallID, toolCall.ToolCall.ToolCallID)
 	}
 }
+
+func TestDoStream_FunctionCall_StreamingChunk(t *testing.T) {
+	chunks := []string{
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"f1","name":"get_weather","args":{},"partialArgs":[{"jsonPath":"city","stringValue":"San ","willContinue":true}]}}]}}]}`,
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"f1","name":"get_weather","args":{},"partialArgs":[{"jsonPath":"city","stringValue":"Francisco"}]}}]}}]}`,
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}`,
+	}
+	p := newTestProvider(t, newSSEHandler(t, chunks))
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	res, err := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
+	if err != nil {
+		t.Fatalf("DoStream: %v", err)
+	}
+	parts := collectStream(t, res.Stream, 2*time.Second)
+	var deltas []string
+	var toolCall *StreamToolCall
+	for _, p := range parts {
+		switch v := p.(type) {
+		case StreamToolInputDelta:
+			deltas = append(deltas, v.Delta)
+		case StreamToolCall:
+			tc := v
+			toolCall = &tc
+		}
+	}
+	if toolCall == nil {
+		t.Fatalf("no StreamToolCall: %+v", parts)
+	}
+	if string(toolCall.ToolCall.Input) != `{"city":"San Francisco"}` {
+		t.Errorf("Input = %s, want %q", toolCall.ToolCall.Input, `{"city":"San Francisco"}`)
+	}
+	if len(deltas) < 2 {
+		t.Errorf("expected >=2 deltas, got %d: %+v", len(deltas), deltas)
+	}
+}
+
+func TestDoStream_FunctionCall_Complete(t *testing.T) {
+	chunks := []string{
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"f1","name":"sum","args":{"a":1,"b":2}}}]}}]}`,
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}`,
+	}
+	p := newTestProvider(t, newSSEHandler(t, chunks))
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	res, _ := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
+	parts := collectStream(t, res.Stream, 2*time.Second)
+	var sawStart, sawDelta, sawEnd, sawCall bool
+	for _, p := range parts {
+		switch p.(type) {
+		case StreamToolInputStart:
+			sawStart = true
+		case StreamToolInputDelta:
+			sawDelta = true
+		case StreamToolInputEnd:
+			sawEnd = true
+		case StreamToolCall:
+			sawCall = true
+		}
+	}
+	if !sawStart || !sawDelta || !sawEnd || !sawCall {
+		t.Errorf("missing events: %+v", parts)
+	}
+}
+
+func TestDoStream_FunctionCall_NoArgs(t *testing.T) {
+	chunks := []string{
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"f1","name":"ping"}}]}}]}`,
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}`,
+	}
+	p := newTestProvider(t, newSSEHandler(t, chunks))
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	res, _ := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
+	parts := collectStream(t, res.Stream, 2*time.Second)
+	var sawStart, sawEnd, sawCall bool
+	var toolCall *StreamToolCall
+	for _, p := range parts {
+		switch v := p.(type) {
+		case StreamToolInputStart:
+			sawStart = true
+		case StreamToolInputEnd:
+			sawEnd = true
+		case StreamToolCall:
+			tc := v
+			toolCall = &tc
+			sawCall = true
+		}
+	}
+	if !sawStart || !sawEnd || !sawCall {
+		t.Errorf("missing events: %+v", parts)
+	}
+	if toolCall == nil {
+		t.Fatalf("no StreamToolCall: %+v", parts)
+	}
+	if string(toolCall.ToolCall.Input) != "{}" {
+		t.Errorf("Input = %s, want {}", toolCall.ToolCall.Input)
+	}
+}
