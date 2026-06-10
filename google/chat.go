@@ -37,10 +37,6 @@ func (m *googleLanguageModel) SupportURLs() map[string][]*regexp.Regexp {
 	return cloneRegexpMap(m.provider.SupportURLs())
 }
 
-func (m *googleLanguageModel) DoStream(ctx context.Context, opts StreamOptions) (*StreamResult, error) {
-	return nil, UnsupportedFunctionalityError{Functionality: "DoStream (not yet implemented — see Milestone 5)"}
-}
-
 // getArgsResult is the typed view returned by getArgs.
 type getArgsResult struct {
 	Options       GoogleOptions
