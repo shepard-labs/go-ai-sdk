@@ -418,6 +418,37 @@ type APIImagenPrediction struct {
 	BytesBase64Encoded string `json:"bytesBase64Encoded"`
 }
 
+// APIVideoOperationRequest is the :predictLongRunning request body.
+type APIVideoOperationRequest struct {
+	Instances  []map[string]any `json:"instances"`
+	Parameters map[string]any   `json:"parameters,omitempty"`
+}
+
+// APIVideoOperationResponse is the LRO response shape for video operations.
+// Wire shape: { "done": bool, "name": string, "metadata": any, "response": { "predictions": [...] } }
+type APIVideoOperationResponse struct {
+	Done     bool                        `json:"done"`
+	Name     string                      `json:"name"`
+	Metadata map[string]any              `json:"metadata,omitempty"`
+	Response *APIVideoOperationResult    `json:"response,omitempty"`
+}
+
+// APIVideoOperationResult wraps the predictions array inside a completed LRO.
+type APIVideoOperationResult struct {
+	Predictions []APIVideoPrediction `json:"predictions,omitempty"`
+}
+
+// APIVideoPrediction carries one generated video.
+type APIVideoPrediction struct {
+	BytesBase64Encoded string       `json:"bytesBase64Encoded,omitempty"`
+	Video              APIVideoURI  `json:"video,omitempty"`
+}
+
+// APIVideoURI carries a video download URI.
+type APIVideoURI struct {
+	URI string `json:"uri,omitempty"`
+}
+
 // APIFileResponse is the file metadata returned by the Files API.
 type APIFileResponse struct {
 	File APIFileMetadata `json:"file"`
