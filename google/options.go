@@ -260,3 +260,55 @@ func toStringSlice(v any) ([]string, bool) {
 	}
 	return nil, false
 }
+
+// videoModelOptionsFromProviderOptions parses the typed VideoModelOptions view
+// from the merged google provider-options namespace. The list of recognized keys
+// is returned so callers can strip them before forwarding passthrough keys.
+func videoModelOptionsFromProviderOptions(merged map[string]any) (VideoModelOptions, []string) {
+	out := VideoModelOptions{}
+	var recognized []string
+	if v, ok := merged["pollIntervalMs"]; ok {
+		if i, ok := v.(int); ok {
+			out.PollIntervalMs = &i
+			recognized = append(recognized, "pollIntervalMs")
+		}
+	}
+	if v, ok := merged["pollTimeoutMs"]; ok {
+		if i, ok := v.(int); ok {
+			out.PollTimeoutMs = &i
+			recognized = append(recognized, "pollTimeoutMs")
+		}
+	}
+	if v, ok := merged["personGeneration"]; ok {
+		if s, ok := v.(string); ok {
+			out.PersonGeneration = s
+			recognized = append(recognized, "personGeneration")
+		}
+	}
+	if v, ok := merged["negativePrompt"]; ok {
+		if s, ok := v.(string); ok {
+			out.NegativePrompt = s
+			recognized = append(recognized, "negativePrompt")
+		}
+	}
+	if v, ok := merged["referenceImages"]; ok {
+		if arr, ok := v.([]any); ok {
+			images := make([]ReferenceImage, 0, len(arr))
+			for _, elem := range arr {
+				if m, ok := elem.(map[string]any); ok {
+					ri := ReferenceImage{}
+					if s, ok := m["bytesBase64Encoded"].(string); ok {
+						ri.BytesBase64Encoded = s
+					}
+					if s, ok := m["gcsUri"].(string); ok {
+						ri.GcsUri = s
+					}
+					images = append(images, ri)
+				}
+			}
+			out.ReferenceImages = images
+			recognized = append(recognized, "referenceImages")
+		}
+	}
+	return out, recognized
+}
