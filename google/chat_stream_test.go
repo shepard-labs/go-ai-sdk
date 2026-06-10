@@ -74,3 +74,83 @@ func TestDoStream_TextOnly(t *testing.T) {
 		t.Errorf("no StreamTextDelta in %+v", parts)
 	}
 }
+
+func TestDoStream_Reasoning(t *testing.T) {
+	chunks := []string{
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"thinking...","thought":true},{"text":"answer"}]},"finishReason":"STOP"}]}`,
+	}
+	p := newTestProvider(t, newSSEHandler(t, chunks))
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	res, err := lm.DoStream(context.Background(), StreamOptions{
+		GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}},
+	})
+	if err != nil {
+		t.Fatalf("DoStream: %v", err)
+	}
+	parts := collectStream(t, res.Stream, 2*time.Second)
+	sawReasoningStart := false
+	sawReasoningDelta := false
+	sawTextStart := false
+	sawTextDelta := false
+	for _, p := range parts {
+		switch p.(type) {
+		case StreamReasoningStart:
+			sawReasoningStart = true
+		case StreamReasoningDelta:
+			sawReasoningDelta = true
+		case StreamTextStart:
+			sawTextStart = true
+		case StreamTextDelta:
+			sawTextDelta = true
+		}
+	}
+	if !sawReasoningStart || !sawReasoningDelta {
+		t.Errorf("missing reasoning events: %+v", parts)
+	}
+	if !sawTextStart || !sawTextDelta {
+		t.Errorf("missing text events: %+v", parts)
+	}
+}
+
+func TestDoStream_CodeExecution(t *testing.T) {
+	chunks := []string{
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"executableCode":{"language":"PYTHON","code":"print(1)"}}]}}]}`,
+		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"codeExecutionResult":{"outcome":"OUTCOME_OK","output":"1"}}]},"finishReason":"STOP"}]}`,
+	}
+	p := newTestProvider(t, newSSEHandler(t, chunks))
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	res, err := lm.DoStream(context.Background(), StreamOptions{
+		GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}},
+	})
+	if err != nil {
+		t.Fatalf("DoStream: %v", err)
+	}
+	parts := collectStream(t, res.Stream, 2*time.Second)
+	var toolCall *StreamToolCall
+	var toolResult *StreamToolResult
+	for _, p := range parts {
+		if tc, ok := p.(StreamToolCall); ok {
+			tc := tc
+			toolCall = &tc
+		}
+		if tr, ok := p.(StreamToolResult); ok {
+			tr := tr
+			toolResult = &tr
+		}
+	}
+	if toolCall == nil {
+		t.Fatalf("no StreamToolCall: %+v", parts)
+	}
+	if toolCall.ToolCall.ToolName != "code_execution" {
+		t.Errorf("ToolName = %q", toolCall.ToolCall.ToolName)
+	}
+	if !toolCall.ToolCall.ProviderExecuted {
+		t.Errorf("expected ProviderExecuted true")
+	}
+	if toolResult == nil {
+		t.Fatalf("no StreamToolResult: %+v", parts)
+	}
+	if toolResult.ToolResult.ToolCallID != toolCall.ToolCall.ToolCallID {
+		t.Errorf("result id %q != call id %q", toolResult.ToolResult.ToolCallID, toolCall.ToolCall.ToolCallID)
+	}
+}

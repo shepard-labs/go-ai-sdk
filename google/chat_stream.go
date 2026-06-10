@@ -391,15 +391,53 @@ func (s *chatStreamState) flushStreamState(parts chan<- StreamPart) {
 // ---- Part handlers (filled in by subsequent tasks) ----
 
 func (m *googleLanguageModel) handleCodeExecutionStart(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
-	_ = parts
-	_ = p
-	_ = state
+	if p.ExecutableCode == nil {
+		return
+	}
+	id := m.provider.generateID()
+	input, _ := json.Marshal(map[string]any{
+		"language": p.ExecutableCode.Language,
+		"code":     p.ExecutableCode.Code,
+	})
+	pm := ProviderMetadata{"google": map[string]any{
+		"providerExecuted": true,
+		"thoughtSignature": p.ThoughtSignature,
+	}}
+	state.toolState[id] = &streamToolState{
+		ID:               id,
+		ToolName:         "code_execution",
+		ProviderExecuted: true,
+		IsServer:         true,
+		IsCodeExecution:  true,
+		ThoughtSignature: p.ThoughtSignature,
+		HasStarted:       true,
+	}
+	state.lastCodeExecID = id
+	parts <- StreamToolCall{ToolCall: ToolCallContent{
+		ToolCallID:       id,
+		ToolName:         "code_execution",
+		Input:            input,
+		ProviderExecuted: true,
+		ProviderMetadata: pm,
+	}}
 }
 
 func (m *googleLanguageModel) handleCodeExecutionResult(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
-	_ = parts
-	_ = p
-	_ = state
+	if p.CodeExecutionResult == nil {
+		return
+	}
+	id := state.lastCodeExecID
+	if id == "" {
+		id = "code_execution-0"
+	}
+	output, _ := json.Marshal(map[string]any{
+		"outcome": p.CodeExecutionResult.Outcome,
+		"output":  p.CodeExecutionResult.Output,
+	})
+	parts <- StreamToolResult{ToolResult: ToolResultContent{
+		ToolCallID: id,
+		Output:     ToolResultOutput{Type: "json", Value: json.RawMessage(output)},
+	}}
 }
 
 func (m *googleLanguageModel) handleFunctionCall(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {

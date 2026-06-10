@@ -338,6 +338,8 @@ type ToolCallContent struct {
 	ToolCallID       string
 	ToolName         string
 	Input            json.RawMessage
+	ProviderExecuted bool
+	Dynamic          bool
 	ProviderMetadata ProviderMetadata
 	ProviderOptions  ProviderOptions
 }

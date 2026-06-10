@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/shepard-labs/go-ai-sdk/google/internal"
@@ -18,18 +19,24 @@ func newTestProvider(t *testing.T, handler http.Handler) *googleProvider {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
+	var counter int64
 	return &googleProvider{
 		baseURL:                        server.URL,
 		name:                           "google.generative-ai",
 		headers:                        http.Header{"User-Agent": []string{"ai-sdk-go/google/0.1.0"}},
 		logger:                         testLogger{t: t},
 		fetch:                          defaultHTTPClient(),
+		generateID:                     func() string { return fmt.Sprintf("test-%d", atomicAdd(&counter)) },
 		retry:                          RetryOptions{MaxRetries: 0, BaseDelay: 0, MaxDelay: 0, Jitter: false},
 		maxResponseBodyBytes:           32 << 20,
 		maxErrorResponseBytes:          1 << 20,
 		maxEmbeddingsPerCall:           2048,
 		supportsParallelEmbeddingCalls: true,
 	}
+}
+
+func atomicAdd(p *int64) int64 {
+	return atomic.AddInt64(p, 1)
 }
 
 type testLogger struct{ t *testing.T }
