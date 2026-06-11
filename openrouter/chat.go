@@ -2,7 +2,6 @@ package openrouter
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -386,8 +385,4 @@ func dataURLParts(url, fallback string) (string, string) {
 		}
 	}
 	return fallback, url
-}
-
-func base64Data(media string, data []byte) string {
-	return "data:" + media + ";base64," + base64.StdEncoding.EncodeToString(data)
 }

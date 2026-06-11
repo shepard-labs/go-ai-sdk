@@ -162,13 +162,6 @@ func (p *openRouterProvider) requestHeaders(call http.Header) http.Header {
 
 func (p *openRouterProvider) nextID() string { return p.generateID() }
 
-type baseModel struct {
-	provider *openRouterProvider
-	modelID  string
-}
-
-func (m baseModel) ModelID() string { return m.modelID }
-
 var chatSupportURLs = map[string][]*regexp.Regexp{
 	"image/*":       {regexp.MustCompile(`^data:image/`), regexp.MustCompile(`^https?://.*\.(?i:jpg|jpeg|png|gif|webp)(?:\?.*)?$`)},
 	"application/*": {regexp.MustCompile(`^data:application/`), regexp.MustCompile(`^https?://`)},
