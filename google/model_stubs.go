@@ -7,20 +7,8 @@ package google
 // milestones; they return UnsupportedFunctionalityError until implemented.
 
 import (
-	"context"
-
 	"github.com/shepard-labs/go-ai-sdk/google/tools"
 )
-
-// ---- Files stub ----
-
-type googleFiles struct {
-	provider *googleProvider
-}
-
-func (f *googleFiles) Upload(ctx context.Context, data []byte, opts FilesUploadOptions) (*FilesUploadResult, error) {
-	return nil, UnsupportedFunctionalityError{Functionality: "Upload (not yet implemented — see Milestone 9)"}
-}
 
 // buildToolFactories returns the Google provider-tool factories.
 // tools.Build() returns tools.ToolFactories (local types, avoids import cycle).

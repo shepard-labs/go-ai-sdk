@@ -7,8 +7,6 @@ package tools
 // dispatcher). The google package re-exports them as type aliases so
 // callers see a single vocabulary.
 
-import "sort"
-
 // GoogleSearchArgs carries optional arguments for the googleSearch provider tool.
 type GoogleSearchArgs struct {
 	SearchTypes     *GoogleSearchTypes
@@ -38,9 +36,4 @@ type FileSearchArgs struct {
 type VertexRagStoreArgs struct {
 	RagCorpus string // "projects/{p}/locations/{l}/ragCorpora/{c}"
 	TopK      *int
-}
-
-// sortStrings is a small helper used by PrepareTools.
-func sortStrings(s []string) {
-	sort.Strings(s)
 }

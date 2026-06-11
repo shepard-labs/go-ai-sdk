@@ -120,11 +120,6 @@ func isAudioInputID(id string) bool {
 	return !isNonInputFamily(id)
 }
 
-// IsGemini3ForTools is the exported wrapper around the unexported isGemini3
-// helper. The tools subpackage reads this to decide whether to enable the
-// includeServerSideToolInvocations mixed-tool behavior.
-func IsGemini3ForTools(modelID string) bool { return isGemini3(modelID) }
-
 // isGemini3 reports whether the model is Gemini 3 or newer (drives the
 // "include server-side tool invocations" mixed-tools behavior).
 func isGemini3(modelID string) bool {

@@ -557,12 +557,6 @@ func (m *googleLanguageModel) handleFunctionCallStreamingChunk(parts chan<- Stre
 	}
 }
 
-func (m *googleLanguageModel) handleFunctionResponse(parts chan<- StreamPart, p *internal.APIPart, state *chatStreamState) {
-	_ = parts
-	_ = p
-	_ = state
-}
-
 func providerMetadataWithSig(name, sig string) ProviderMetadata {
 	if sig == "" {
 		return nil

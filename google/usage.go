@@ -40,12 +40,6 @@ func convertGoogleUsage(raw *internal.APIUsageMetadata) Usage {
 	}
 }
 
-// defaultChatUsage returns an empty Usage for skeleton stubs that do not yet
-// implement usage conversion.
-func defaultChatUsage() Usage {
-	return Usage{}
-}
-
 func intPtr(v int) *int { return &v }
 
 func marshalUsageRaw(v any) json.RawMessage {

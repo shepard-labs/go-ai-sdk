@@ -15,7 +15,6 @@ package google
 import (
 	"context"
 	"encoding/json"
-	"math"
 	"net/http"
 	"regexp"
 	"strings"
@@ -39,11 +38,11 @@ func (m *googleLanguageModel) SupportURLs() map[string][]*regexp.Regexp {
 
 // getArgsResult is the typed view returned by getArgs.
 type getArgsResult struct {
-	Options       GoogleOptions
-	Passthrough   map[string]any
-	Warnings      []Warning
-	IsVertexLike  bool
-	IsVertex      bool
+	Options      GoogleOptions
+	Passthrough  map[string]any
+	Warnings     []Warning
+	IsVertexLike bool
+	IsVertex     bool
 }
 
 // getArgs merges the ProviderOptions map into a typed GoogleOptions view and
@@ -734,10 +733,10 @@ func (m *googleLanguageModel) DoGenerate(ctx context.Context, opts GenerateOptio
 		}
 	}
 	parsed.Response = ResponseMetadata{
-		ID:        respID,
-		ModelID:   m.modelID,
-		Headers:   cloneHeader(resp.Headers),
-		Body:      append([]byte(nil), resp.Body...),
+		ID:      respID,
+		ModelID: m.modelID,
+		Headers: cloneHeader(resp.Headers),
+		Body:    append([]byte(nil), resp.Body...),
 	}
 	return parsed, nil
 }
@@ -1163,12 +1162,4 @@ func modalityDetailsToPublic(d []internal.APIModalityTokenCount) []map[string]an
 		})
 	}
 	return out
-}
-
-// roundUpMax returns the smallest integer >= value, useful for budget calculations.
-func roundUpMax(value float64) int {
-	if value <= 0 {
-		return 0
-	}
-	return int(math.Ceil(value))
 }

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/shepard-labs/go-ai-sdk/google/tools"
-	"github.com/shepard-labs/go-ai-sdk/openaicompatible"
 )
 
 // Version is the package version used in the User-Agent header.
@@ -22,18 +21,29 @@ const ProviderName = "google"
 // available to the client. Injected only on Gemini 3+ models.
 const SkipThoughtSignatureValidator = "skip_thought_signature_validator"
 
-// Fetcher executes HTTP requests. Type alias of openaicompatible.Fetcher so
-// callers see a single vocabulary across providers.
-type Fetcher = openaicompatible.Fetcher
+// Fetcher executes HTTP requests.
+type Fetcher interface {
+	Do(req *http.Request) (*http.Response, error)
+}
 
-// IDGenerator generates request IDs. Type alias of openaicompatible.IDGenerator.
-type IDGenerator = openaicompatible.IDGenerator
+// IDGenerator generates request IDs.
+type IDGenerator func() string
 
-// RetryOptions configures retry behavior. Type alias of openaicompatible.RetryOptions.
-type RetryOptions = openaicompatible.RetryOptions
+// RetryOptions configures retry behavior.
+type RetryOptions struct {
+	MaxRetries int
+	BaseDelay  time.Duration
+	MaxDelay   time.Duration
+	Jitter     bool
+}
 
-// Logger receives operational logs. Type alias of openaicompatible.Logger.
-type Logger = openaicompatible.Logger
+// Logger receives operational logs.
+type Logger interface {
+	Debug(msg string, keysAndValues ...any)
+	Info(msg string, keysAndValues ...any)
+	Warn(msg string, keysAndValues ...any)
+	Error(msg string, keysAndValues ...any)
+}
 
 // ProviderOptions is the map of provider-specific options keyed by provider name.
 // Use "google" as the outer key.

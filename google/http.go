@@ -210,6 +210,9 @@ func (p *googleProvider) executeBuffered(ctx context.Context, method, path strin
 			}
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return p.readResponse(resp)
 	}
 	return nil, lastErr

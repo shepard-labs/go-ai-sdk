@@ -376,20 +376,6 @@ func TestProviderName(t *testing.T) {
 	}
 }
 
-// TestStubs_ReturnUnsupportedError verifies that stub methods (files) return
-// UnsupportedFunctionalityError (not nil, not a different error type).
-// Speech was implemented in M8; Files remains a stub.
-func TestStubs_ReturnUnsupportedError(t *testing.T) {
-	t.Setenv("GOOGLE_GENERATIVE_AI_API_KEY", "test-key")
-	p := CreateGoogle(ProviderSettings{})
-
-	var uf UnsupportedFunctionalityError
-
-	if _, err := p.Files().(*googleFiles).Upload(nil, nil, FilesUploadOptions{}); !errors.As(err, &uf) {
-		t.Errorf("files Upload: got %T (%v), want UnsupportedFunctionalityError", err, err)
-	}
-}
-
 // TestRetryOptions_Defaults verifies the default retry configuration.
 func TestRetryOptions_Defaults(t *testing.T) {
 	opts := defaultRetryOptions(nil)

@@ -4,31 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
-
-// mockFetcher is a Fetcher that routes requests to a test server handler.
-type mockFetcher struct {
-	server *httptest.Server
-}
-
-func newMockFetcher(handler func(http.ResponseWriter, *http.Request)) *mockFetcher {
-	m := &mockFetcher{}
-	m.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler(w, r)
-	}))
-	return m
-}
-
-func (f *mockFetcher) Do(req *http.Request) (*http.Response, error) {
-	return http.DefaultClient.Do(req)
-}
-
-func (f *mockFetcher) URL() string { return f.server.URL }
-
-func (f *mockFetcher) Close() { f.server.Close() }
 
 // ---- Test cases ----
 
