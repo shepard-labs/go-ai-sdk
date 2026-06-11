@@ -23,12 +23,7 @@ var ToolNameMapping = anthropic.ToolNameMapping{
 	"anthropic.code_execution_20250522":    "code_execution",
 	"anthropic.code_execution_20250825":    "code_execution",
 	"anthropic.code_execution_20260120":    "code_execution",
-	"anthropic.computer_20241022":          "computer",
-	"anthropic.computer_20250124":          "computer",
 	"anthropic.computer_20251124":          "computer",
-	"anthropic.text_editor_20241022":       "str_replace_editor",
-	"anthropic.text_editor_20250124":       "str_replace_editor",
-	"anthropic.text_editor_20250429":       "str_replace_based_edit_tool",
 	"anthropic.text_editor_20250728":       "str_replace_based_edit_tool",
 	"anthropic.bash_20241022":              "bash",
 	"anthropic.bash_20250124":              "bash",
@@ -55,22 +50,6 @@ func CodeExecution_20260120() anthropic.Tool {
 	return providerTool("anthropic.code_execution_20260120", "code_execution_20260120")
 }
 
-func Computer_20241022(displayWidthPx, displayHeightPx, displayNumber int) anthropic.Tool {
-	tool := providerTool("anthropic.computer_20241022", "computer_20241022")
-	tool.DisplayWidthPx = &displayWidthPx
-	tool.DisplayHeightPx = &displayHeightPx
-	tool.DisplayNumber = &displayNumber
-	return tool
-}
-
-func Computer_20250124(displayWidthPx, displayHeightPx, displayNumber int) anthropic.Tool {
-	tool := providerTool("anthropic.computer_20250124", "computer_20250124")
-	tool.DisplayWidthPx = &displayWidthPx
-	tool.DisplayHeightPx = &displayHeightPx
-	tool.DisplayNumber = &displayNumber
-	return tool
-}
-
 func Computer_20251124(displayWidthPx, displayHeightPx, displayNumber int, enableZoom bool) anthropic.Tool {
 	tool := providerTool("anthropic.computer_20251124", "computer_20251124")
 	tool.DisplayWidthPx = &displayWidthPx
@@ -78,16 +57,6 @@ func Computer_20251124(displayWidthPx, displayHeightPx, displayNumber int, enabl
 	tool.DisplayNumber = &displayNumber
 	tool.EnableZoom = &enableZoom
 	return tool
-}
-
-func TextEditor_20241022() anthropic.Tool {
-	return providerTool("anthropic.text_editor_20241022", "text_editor_20241022")
-}
-func TextEditor_20250124() anthropic.Tool {
-	return providerTool("anthropic.text_editor_20250124", "text_editor_20250124")
-}
-func TextEditor_20250429() anthropic.Tool {
-	return providerTool("anthropic.text_editor_20250429", "text_editor_20250429")
 }
 
 func TextEditor_20250728(maxCharacters *int) anthropic.Tool {

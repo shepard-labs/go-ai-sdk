@@ -521,7 +521,10 @@ type StreamSource struct {
 
 func (StreamSource) IsStreamPart() {}
 
-type StreamResponseMetadata struct{ ProviderMetadata ProviderMetadata }
+type StreamResponseMetadata struct {
+	ID      string
+	ModelID string
+}
 
 func (StreamResponseMetadata) IsStreamPart() {}
 
@@ -541,10 +544,6 @@ type StreamRaw struct{ Event any }
 
 func (StreamRaw) IsStreamPart() {}
 
-type TextDelta struct{ Text string }
-
-func (TextDelta) IsDelta() {}
-
 type ThinkingDelta struct{ Thinking string }
 
 func (ThinkingDelta) IsDelta() {}
@@ -556,14 +555,6 @@ func (SignatureDelta) IsDelta() {}
 type InputJSONDelta struct{ PartialJSON string }
 
 func (InputJSONDelta) IsDelta() {}
-
-type CompactionDelta struct{ Text string }
-
-func (CompactionDelta) IsDelta() {}
-
-type CitationsDelta struct{ Citations []Citation }
-
-func (CitationsDelta) IsDelta() {}
 
 type Tool struct {
 	ID                  string

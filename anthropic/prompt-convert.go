@@ -48,8 +48,6 @@ type apiBlockSource struct {
 	URL       string `json:"url,omitempty"`
 }
 
-func ConvertPrompt(messages []Message) []Message { return messages }
-
 func convertPrompt(messages []Message) ([]apiContentBlock, []apiMessage) {
 	var system []apiContentBlock
 	var converted []apiMessage

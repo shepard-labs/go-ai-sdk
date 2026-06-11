@@ -279,10 +279,6 @@ func betaHeadersForOptions(opts ModelOptions) []string {
 			add("code-execution-2025-05-22")
 		case "anthropic.code_execution_20250825", "anthropic.code_execution_20260120":
 			add("code-execution-2025-08-25")
-		case "anthropic.computer_20241022":
-			add("computer-use-2024-10-22")
-		case "anthropic.computer_20250124", "anthropic.bash_20250124", "anthropic.memory_20250818":
-			add("computer-use-2025-01-24")
 		case "anthropic.computer_20251124":
 			add("computer-use-2025-11-24")
 		case "anthropic.text_editor_20250728":

@@ -85,8 +85,6 @@ type InputTokensCount struct {
 	Value int `json:"input_tokens"`
 }
 
-func (InputTokensCount) IsContextManagementCount() {}
-
 type ThinkingTurnsCount struct {
 	Value int `json:"thinking_turns"`
 }

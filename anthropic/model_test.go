@@ -271,7 +271,7 @@ func TestDoStreamTextOnly(t *testing.T) {
 	for part := range result.Stream {
 		parts = append(parts, part)
 	}
-	if len(parts) != 5 || parts[2].(StreamTextDelta).Text != "hi" || result.Response.ID != "msg_1" {
+	if len(parts) != 6 || parts[0].(StreamStart) != (StreamStart{}) || parts[1].(StreamResponseMetadata).ID != "msg_1" || parts[3].(StreamTextDelta).Text != "hi" || result.Response.ID != "msg_1" {
 		t.Fatalf("parts = %#v response = %#v", parts, result.Response)
 	}
 }

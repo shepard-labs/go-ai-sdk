@@ -736,6 +736,7 @@ func emitSSEEvent(eventType, data string, out chan<- StreamPart, blockTypes map[
 		response.ID = message.Message.ID
 		response.ModelID = message.Message.Model
 		out <- StreamStart{}
+		out <- StreamResponseMetadata{ID: message.Message.ID, ModelID: message.Message.Model}
 	case "content_block_start":
 		var event struct {
 			Index        int             `json:"index"`
