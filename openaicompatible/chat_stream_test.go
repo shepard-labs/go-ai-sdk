@@ -90,8 +90,6 @@ func itoa(n int) string {
 	return strconv.Itoa(n)
 }
 
-func intPtrVal(v int) *int { return &v }
-
 // --- Tests ---
 
 func TestChatStreamRequestHasStreamTrue(t *testing.T) {
