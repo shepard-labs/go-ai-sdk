@@ -190,11 +190,11 @@ func (m *openAICompatibleCompletionLanguageModel) DoGenerate(ctx context.Context
 
 // completionResponse is the non-streaming completion API response shape.
 type completionResponse struct {
-	ID      string               `json:"id"`
-	Created *int64               `json:"created"`
-	Model   string               `json:"model"`
-	Choices []completionChoice   `json:"choices"`
-	Usage   json.RawMessage      `json:"usage"`
+	ID      string             `json:"id"`
+	Created *int64             `json:"created"`
+	Model   string             `json:"model"`
+	Choices []completionChoice `json:"choices"`
+	Usage   json.RawMessage    `json:"usage"`
 }
 
 type completionChoice struct {

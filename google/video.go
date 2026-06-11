@@ -223,7 +223,7 @@ func (m *googleVideoModel) DoGenerate(ctx context.Context, opts VideoGenerateOpt
 					uris[i] = appendKey(pred.Video.URI, m.provider.apiKey)
 				}
 				return &VideoGenerateResult{
-					Videos: uris,
+					Videos:   uris,
 					Warnings: warnings,
 					ProviderMetadata: ProviderMetadata{
 						"google": map[string]any{"operationName": opResp.Name},

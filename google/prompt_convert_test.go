@@ -226,9 +226,9 @@ func TestConvertPrompt_ToolCallSignatureRoundtrip(t *testing.T) {
 			UserMessage{Content: []UserContent{TextContent{Text: "go"}}},
 			AssistantMessage{Content: []AssistantContent{
 				ToolCallContent{
-					ToolName:    "get_weather",
-					ToolCallID:  "call-1",
-					Input:       []byte(`{"city":"sf"}`),
+					ToolName:         "get_weather",
+					ToolCallID:       "call-1",
+					Input:            []byte(`{"city":"sf"}`),
 					ProviderMetadata: ProviderMetadata{"google": map[string]any{"thoughtSignature": "sig-tool"}},
 				},
 			}},
@@ -285,17 +285,17 @@ func TestConvertPrompt_ServerToolPairing_AppendsToLastModel(t *testing.T) {
 			UserMessage{Content: []UserContent{TextContent{Text: "search"}}},
 			AssistantMessage{Content: []AssistantContent{
 				ToolCallContent{
-					ToolName:   "google_search",
-					ToolCallID: "srv-1",
-					Input:      []byte(`{}`),
+					ToolName:         "google_search",
+					ToolCallID:       "srv-1",
+					Input:            []byte(`{}`),
 					ProviderMetadata: ProviderMetadata{"google": map[string]any{"serverToolType": "google_search"}},
 				},
 			}},
 			ToolMessage{
 				Content: []ToolContent{
 					ToolResultContent{
-						ToolCallID: "srv-1",
-						Output:     ToolResultOutput{Type: "text", Value: "result"},
+						ToolCallID:      "srv-1",
+						Output:          ToolResultOutput{Type: "text", Value: "result"},
 						ProviderOptions: ProviderOptions{"google": map[string]any{"serverToolType": "google_search"}},
 					},
 				},

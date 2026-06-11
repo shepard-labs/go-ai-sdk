@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1144,21 +1143,9 @@ func TestCompletionStreamMidStreamFailuresAreNotRetried(t *testing.T) {
 }
 
 func TestCompletionStreamResponseBodyClosesOnNormalCompletion(t *testing.T) {
-	var closed atomic.Bool
-	type closingBody struct {
-		io.Reader
-	}
-	body := &struct {
-		io.Reader
-		closed *atomic.Bool
-	}{
-		Reader: strings.NewReader(sse().add(completionChunk("hi")).done().build()),
-		closed: &closed,
-	}
 	// Use trackedBody from chat_stream_test.go.
 	tracked := &trackedBody{Reader: strings.NewReader(sse().add(completionChunk("hi")).done().build())}
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: tracked}
-	_ = body // suppress unused
 	f := &recordingFetcher{responses: []*http.Response{resp}}
 	p := completionProvider(t, f)
 	result, err := p.Completion("gpt-3").DoStream(context.Background(), StreamOptions{

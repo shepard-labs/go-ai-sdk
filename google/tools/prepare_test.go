@@ -23,7 +23,7 @@ func TestPrepareTools_FunctionTool_BasicShape(t *testing.T) {
 	in := []ToolView{view("function", "", "get_weather")}
 	in[0].Description = "Get the weather"
 	in[0].InputSchema = map[string]any{
-		"type": "object",
+		"type":       "object",
 		"properties": map[string]any{"city": map[string]any{"type": "string"}},
 	}
 	out, _, _, err := PrepareTools(in, PrepareToolsOpts{ModelID: "gemini-2.5-pro"})
@@ -139,10 +139,10 @@ func TestPrepareTools_MixedTools_PreGemini3_Warning(t *testing.T) {
 
 func TestPrepareTools_ToolChoice_Mapping(t *testing.T) {
 	cases := []struct {
-		name    string
-		choice  *ToolChoiceView
+		name      string
+		choice    *ToolChoiceView
 		anyStrict bool
-		wantMode string
+		wantMode  string
 	}{
 		{"nil choice, no strict", nil, false, ""},
 		{"nil choice, strict", nil, true, "VALIDATED"},
@@ -293,7 +293,6 @@ func TestPrepareTools_JSONMarshalStable(t *testing.T) {
 
 func intPtr(n int) *int { return &n }
 
-
 // ---- Tool factory output tests ----
 
 func TestTools_GoogleSearch_Default(t *testing.T) {
@@ -390,8 +389,8 @@ func TestTools_FileSearch_WithArgs(t *testing.T) {
 	k := 10
 	got := tools.FileSearch(FileSearchArgs{
 		FileSearchStoreNames: []string{"store-a", "store-b"},
-		TopK:                &k,
-		MetadataFilter:      "key=value",
+		TopK:                 &k,
+		MetadataFilter:       "key=value",
 	})
 	args, ok := got.ArgsSchema.(FileSearchArgs)
 	if !ok {

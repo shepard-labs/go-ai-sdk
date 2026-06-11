@@ -284,4 +284,3 @@ func TestVideo_MapResolution(t *testing.T) {
 		}
 	}
 }
-

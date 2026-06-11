@@ -383,13 +383,13 @@ type Tool struct {
 // ToolFactories mirrors [google.ToolFactories] for use within this subpackage.
 // Defined locally to avoid an import cycle.
 type ToolFactories struct {
-	GoogleSearch       func(args ...GoogleSearchArgs) Tool
+	GoogleSearch        func(args ...GoogleSearchArgs) Tool
 	EnterpriseWebSearch func() Tool
-	GoogleMaps         func() Tool
-	UrlContext         func() Tool
-	FileSearch         func(args FileSearchArgs) Tool
-	CodeExecution      func() Tool
-	VertexRagStore     func(args VertexRagStoreArgs) Tool
+	GoogleMaps          func() Tool
+	UrlContext          func() Tool
+	FileSearch          func(args FileSearchArgs) Tool
+	CodeExecution       func() Tool
+	VertexRagStore      func(args VertexRagStoreArgs) Tool
 }
 
 // Tools holds the Google provider-tool factory set.
@@ -437,13 +437,13 @@ func (Tools) VertexRagStore(args VertexRagStoreArgs) Tool {
 // Build returns the full ToolFactories from the default Tools instance.
 func (Tools) Build() ToolFactories {
 	return ToolFactories{
-		GoogleSearch:       func(args ...GoogleSearchArgs) Tool { return tools.GoogleSearch(args...) },
+		GoogleSearch:        func(args ...GoogleSearchArgs) Tool { return tools.GoogleSearch(args...) },
 		EnterpriseWebSearch: func() Tool { return tools.EnterpriseWebSearch() },
-		GoogleMaps:         func() Tool { return tools.GoogleMaps() },
-		UrlContext:         func() Tool { return tools.UrlContext() },
-		FileSearch:         func(args FileSearchArgs) Tool { return tools.FileSearch(args) },
-		CodeExecution:      func() Tool { return tools.CodeExecution() },
-		VertexRagStore:     func(args VertexRagStoreArgs) Tool { return tools.VertexRagStore(args) },
+		GoogleMaps:          func() Tool { return tools.GoogleMaps() },
+		UrlContext:          func() Tool { return tools.UrlContext() },
+		FileSearch:          func(args FileSearchArgs) Tool { return tools.FileSearch(args) },
+		CodeExecution:       func() Tool { return tools.CodeExecution() },
+		VertexRagStore:      func(args VertexRagStoreArgs) Tool { return tools.VertexRagStore(args) },
 	}
 }
 

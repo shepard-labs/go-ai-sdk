@@ -286,10 +286,10 @@ func speechModelOptionsFromProviderOptions(merged map[string]any) (SpeechModelOp
 // The header encodes pcm/s16le/mono at the given sampleRate.
 func wrapWAVHeader(pcmData []byte, sampleRate int) []byte {
 	const (
-		wavHeaderSize  = 44
-		numChannels    = 1
-		bitsPerSample  = 16
-		blockAlign     = numChannels * bitsPerSample / 8
+		wavHeaderSize = 44
+		numChannels   = 1
+		bitsPerSample = 16
+		blockAlign    = numChannels * bitsPerSample / 8
 	)
 	dataSize := len(pcmData)
 	bytesPerSec := sampleRate * numChannels * bitsPerSample / 8
@@ -301,8 +301,8 @@ func wrapWAVHeader(pcmData []byte, sampleRate int) []byte {
 	copy(header[8:12], "WAVE")
 	// fmt sub-chunk
 	copy(header[12:16], "fmt ")
-	binary.LittleEndian.PutUint32(header[16:20], 16)             // subchunk1Size
-	binary.LittleEndian.PutUint16(header[20:22], 1)              // audioFormat (PCM)
+	binary.LittleEndian.PutUint32(header[16:20], 16) // subchunk1Size
+	binary.LittleEndian.PutUint16(header[20:22], 1)  // audioFormat (PCM)
 	binary.LittleEndian.PutUint16(header[22:24], uint16(numChannels))
 	binary.LittleEndian.PutUint32(header[24:28], uint32(sampleRate))
 	binary.LittleEndian.PutUint32(header[28:32], uint32(bytesPerSec))

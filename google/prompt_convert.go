@@ -275,8 +275,8 @@ func convertAssistantParts(modelID string, content []AssistantContent) ([]intern
 		case ReasoningContent:
 			thought := true
 			p := internal.APIPart{
-				Text:     part.Text,
-				Thought:  &thought,
+				Text:    part.Text,
+				Thought: &thought,
 			}
 			if sig := thoughtSignatureFrom(part.ProviderOptions, "thoughtSignature", part.Signature); sig != "" {
 				p.ThoughtSignature = sig

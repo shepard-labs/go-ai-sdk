@@ -516,7 +516,7 @@ func TestSpeech_DoGenerate_MultiSpeakerVoiceConfig(t *testing.T) {
 
 	_, err := m.DoGenerate(context.Background(), SpeechGenerateOptions{
 		Text:            "hello",
-		Voice:           "Femma", // should be ignored
+		Voice:           "Femma",   // should be ignored
 		Instructions:    "narrate", // should be ignored
 		ProviderOptions: ProviderOptions{"google": map[string]any{"multiSpeakerVoiceConfig": map[string]any{"speakerVoiceConfigs": []any{map[string]any{"speaker": "s1", "voiceConfig": map[string]any{"voiceName": "Kore"}}}}}},
 	})
@@ -614,8 +614,8 @@ func TestSpeech_DoGenerate_Warnings_Language(t *testing.T) {
 	m := stubSpeechModel(mf)
 
 	result, err := m.DoGenerate(context.Background(), SpeechGenerateOptions{
-		Text:      "hello",
-		Language:  "en",
+		Text:     "hello",
+		Language: "en",
 	})
 	if err != nil {
 		t.Fatalf("DoGenerate failed: %v", err)

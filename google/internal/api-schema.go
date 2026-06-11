@@ -6,7 +6,9 @@ package internal
 // ConvertJSONSchemaToOpenAPISchema is the public re-export of the
 // package-private conversion function. The tools subpackage and the
 // language model call this for responseSchema and tool parameter conversion.
-func ConvertJSONSchemaToOpenAPISchema(schema any) any { return convertJSONSchemaToOpenAPISchema(schema) }
+func ConvertJSONSchemaToOpenAPISchema(schema any) any {
+	return convertJSONSchemaToOpenAPISchema(schema)
+}
 
 // convertJSONSchemaToOpenAPISchema converts a JSON Schema 7 (subset) value to
 // the OpenAPI 3.0 schema shape that Google's responseSchema and tool

@@ -427,10 +427,10 @@ type APIVideoOperationRequest struct {
 // APIVideoOperationResponse is the LRO response shape for video operations.
 // Wire shape: { "done": bool, "name": string, "metadata": any, "response": { "predictions": [...] } }
 type APIVideoOperationResponse struct {
-	Done     bool                        `json:"done"`
-	Name     string                      `json:"name"`
-	Metadata map[string]any              `json:"metadata,omitempty"`
-	Response *APIVideoOperationResult    `json:"response,omitempty"`
+	Done     bool                     `json:"done"`
+	Name     string                   `json:"name"`
+	Metadata map[string]any           `json:"metadata,omitempty"`
+	Response *APIVideoOperationResult `json:"response,omitempty"`
 }
 
 // APIVideoOperationResult wraps the predictions array inside a completed LRO.
@@ -440,8 +440,8 @@ type APIVideoOperationResult struct {
 
 // APIVideoPrediction carries one generated video.
 type APIVideoPrediction struct {
-	BytesBase64Encoded string       `json:"bytesBase64Encoded,omitempty"`
-	Video              APIVideoURI  `json:"video,omitempty"`
+	BytesBase64Encoded string      `json:"bytesBase64Encoded,omitempty"`
+	Video              APIVideoURI `json:"video,omitempty"`
 }
 
 // APIVideoURI carries a video download URI.

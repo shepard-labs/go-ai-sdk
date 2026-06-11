@@ -551,4 +551,3 @@ func TestEmbeddingSingleViaHTTP(t *testing.T) {
 		t.Fatalf("Embeddings = %v", result.Embeddings)
 	}
 }
-
