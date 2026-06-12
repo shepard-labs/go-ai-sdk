@@ -236,6 +236,7 @@ type Tool struct {
 	Description string
 	InputSchema any
 	Strict      *bool
+	Args        any
 }
 
 type ToolChoice struct {
