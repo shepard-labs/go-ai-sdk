@@ -121,9 +121,6 @@ type apiMessagesRequest struct {
 	TopP                   *float64           `json:"top_p,omitempty"`
 	Tools                  []Tool             `json:"tools,omitempty"`
 	ToolChoice             *ToolChoice        `json:"tool_choice,omitempty"`
-	Effort                 string             `json:"effort,omitempty"`
-	TaskBudget             *int               `json:"task_budget,omitempty"`
-	SendReasoning          bool               `json:"send_reasoning,omitempty"`
 	Container              *Container         `json:"container,omitempty"`
 	MCPServers             []MCPServer        `json:"mcp_servers,omitempty"`
 	Speed                  string             `json:"speed,omitempty"`
@@ -149,27 +146,62 @@ func (m *anthropicLanguageModel) buildRequest(opts GenerateOptions, stream bool)
 func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, stream bool) (apiMessagesRequest, []Warning, ModelOptions) {
 	system, messages := convertPrompt(opts.Messages)
 	temperature, warnings := normalizeTemperature(opts.Temperature)
-	warnings = append(warnings, unsupportedWarnings(opts)...)
+	warnings = append(warnings, unsupportedWarnings(opts, ModelCapabilitiesForID(m.modelID))...)
 	preparedTools := prepareToolsForRequest(opts.Tools, opts.ToolOptions)
 	modelOptions := m.options
 	modelOptions.RequestTools = preparedTools
-	toolChoice := opts.ToolChoice
+	toolChoice := normalizeToolChoice(opts.ToolChoice)
 	if toolChoice != nil && toolChoice.DisableParallelToolUse {
 		modelOptions.DisableParallelToolUse = true
 	}
 	maxTokens := opts.MaxTokens
 	thinking, thinkingWarnings := buildThinking(modelOptions.Thinking, &maxTokens, &temperature, &opts.TopK, &opts.TopP)
 	warnings = append(warnings, thinkingWarnings...)
+	topK := opts.TopK
+	topP := opts.TopP
+	if ModelCapabilitiesForID(m.modelID).RejectsSampling {
+		if temperature != nil && *temperature != 1.0 {
+			warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "temperature is not supported by this Anthropic model"})
+		}
+		if topK != nil {
+			warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "topK is not supported by this Anthropic model"})
+		}
+		if topP != nil {
+			warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "topP is not supported by this Anthropic model"})
+		}
+		temperature = nil
+		topK = nil
+		topP = nil
+	}
+	if temperature != nil && topP != nil {
+		topP = nil
+	}
 	outputConfig, structuredTools, structuredChoice, disableParallel := m.buildStructuredOutput(opts.StructuredOutput, opts.ResponseFormat, modelOptions)
+	if outputConfig == nil && (modelOptions.Effort != "" || modelOptions.TaskBudget != nil) {
+		outputConfig = &OutputConfig{}
+	}
+	if outputConfig != nil {
+		outputConfig.Effort = modelOptions.Effort
+		if modelOptions.TaskBudget != nil {
+			outputConfig.TaskBudget = &TokenTaskBudget{Type: "tokens", Total: *modelOptions.TaskBudget}
+		}
+	}
+	preparedTools = append(preparedTools, prepareMCPToolsets(modelOptions.MCPServers)...)
 	if len(structuredTools) > 0 {
 		preparedTools = append(preparedTools, structuredTools...)
 		modelOptions.RequestTools = preparedTools
 	}
 	if structuredChoice != nil {
-		toolChoice = structuredChoice
+		toolChoice = normalizeToolChoice(structuredChoice)
 	}
 	if disableParallel {
 		modelOptions.DisableParallelToolUse = true
+	}
+	if modelOptions.DisableParallelToolUse && len(preparedTools) > 0 {
+		if toolChoice == nil {
+			toolChoice = &ToolChoice{Type: "auto"}
+		}
+		toolChoice.DisableParallelToolUse = true
 	}
 	return apiMessagesRequest{
 		Model:                  m.modelID,
@@ -180,23 +212,36 @@ func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, s
 		StopSequences:          opts.StopSequences,
 		Stream:                 stream,
 		Temperature:            temperature,
-		TopK:                   opts.TopK,
-		TopP:                   opts.TopP,
+		TopK:                   topK,
+		TopP:                   topP,
 		Tools:                  preparedTools,
 		ToolChoice:             toolChoice,
 		Container:              modelOptions.Container,
 		MCPServers:             modelOptions.MCPServers,
 		Speed:                  modelOptions.Speed,
 		InferenceGeo:           modelOptions.InferenceGeo,
-		Effort:                 modelOptions.Effort,
-		TaskBudget:             modelOptions.TaskBudget,
-		SendReasoning:          modelOptions.SendReasoning,
 		ResponseFormat:         opts.ResponseFormat,
 		OutputConfig:           outputConfig,
 		Thinking:               thinking,
 		ContextManagement:      modelOptions.ContextManagement,
 		DisableParallelToolUse: modelOptions.DisableParallelToolUse,
 	}, warnings, modelOptions
+}
+
+func normalizeToolChoice(choice *ToolChoice) *ToolChoice {
+	if choice == nil {
+		return nil
+	}
+	normalized := *choice
+	switch normalized.Type {
+	case "required":
+		if normalized.Name != "" {
+			normalized.Type = "tool"
+		} else {
+			normalized.Type = "any"
+		}
+	}
+	return &normalized
 }
 
 func buildThinking(config *ThinkingConfig, maxTokens *int, temperature **float64, topK **int, topP **float64) (*apiThinking, []Warning) {
@@ -255,8 +300,37 @@ func (m *anthropicLanguageModel) buildStructuredOutput(output *StructuredOutput,
 	if mode == StructuredOutputModeJSONTool {
 		return nil, []Tool{{Name: "json", Description: "Respond with JSON matching the requested schema.", InputSchema: sanitized}}, &ToolChoice{Type: "required", Name: "json", DisableParallelToolUse: true}, true
 	}
-	return &OutputConfig{Format: &ResponseFormat{Type: "json", Schema: sanitized}}, nil, nil, false
+	return &OutputConfig{Format: &ResponseFormat{Type: "json_schema", Schema: sanitized}}, nil, nil, false
 }
+
+func prepareMCPToolsets(servers []MCPServer) []Tool {
+	if len(servers) == 0 {
+		return nil
+	}
+	toolsets := make([]Tool, 0, len(servers))
+	for _, server := range servers {
+		if server.Name == "" {
+			continue
+		}
+		toolset := Tool{Type: "mcp_toolset", MCPServerName: server.Name}
+		if server.ToolConfiguration != nil {
+			config := server.ToolConfiguration
+			if len(config.AllowedTools) > 0 {
+				toolset.DefaultConfig = &MCPToolConfig{Enabled: boolPtr(false)}
+				toolset.Configs = make(map[string]MCPToolConfig, len(config.AllowedTools))
+				for _, name := range config.AllowedTools {
+					toolset.Configs[name] = MCPToolConfig{Enabled: boolPtr(true)}
+				}
+			} else if !config.Enabled {
+				toolset.DefaultConfig = &MCPToolConfig{Enabled: boolPtr(false)}
+			}
+		}
+		toolsets = append(toolsets, toolset)
+	}
+	return toolsets
+}
+
+func boolPtr(value bool) *bool { return &value }
 
 func prepareToolsForRequest(input []Tool, opts ToolOptions) []Tool {
 	prepared := make([]Tool, len(input))
@@ -291,7 +365,7 @@ func normalizeTemperature(input *float64) (*float64, []Warning) {
 	return &value, nil
 }
 
-func unsupportedWarnings(opts GenerateOptions) []Warning {
+func unsupportedWarnings(opts GenerateOptions, capabilities ModelCapabilities) []Warning {
 	var warnings []Warning
 	if opts.FrequencyPenalty != nil {
 		warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "frequencyPenalty is not supported by Anthropic"})
@@ -302,7 +376,7 @@ func unsupportedWarnings(opts GenerateOptions) []Warning {
 	if opts.Seed != nil {
 		warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "seed is not supported by Anthropic"})
 	}
-	if opts.TopP != nil && opts.Temperature != nil {
+	if opts.TopP != nil && opts.Temperature != nil && !capabilities.RejectsSampling {
 		warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "topP is ignored when temperature is set for Anthropic models"})
 	}
 	return warnings
@@ -363,10 +437,8 @@ func timeNewTimer(delay time.Duration) *time.Timer { return time.NewTimer(delay)
 
 func ModelCapabilitiesForID(modelID string) ModelCapabilities {
 	switch modelID {
-	case "claude-opus-4-8", "claude-opus-4-7":
+	case "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6":
 		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}
-	case "claude-sonnet-4-6", "claude-opus-4-6":
-		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true}
 	case "claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5", "claude-haiku-4-5-20251001":
 		return ModelCapabilities{MaxOutputTokens: 64000, StructuredOutput: true}
 	case "claude-opus-4-1":

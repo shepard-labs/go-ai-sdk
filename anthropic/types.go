@@ -12,14 +12,11 @@ const Version = "0.1.0"
 type ModelID string
 
 const (
-	ModelClaude3Haiku20240307   ModelID = "claude-3-haiku-20240307"
 	ModelClaudeHaiku45_20251001 ModelID = "claude-haiku-4-5-20251001"
 	ModelClaudeSonnet4          ModelID = "claude-sonnet-4"
 	ModelClaudeSonnet45         ModelID = "claude-sonnet-4-5"
 	ModelClaudeSonnet46         ModelID = "claude-sonnet-4-6"
 	ModelClaudeOpus4            ModelID = "claude-opus-4"
-	ModelClaudeOpus41           ModelID = "claude-opus-4-1"
-	ModelClaudeOpus45           ModelID = "claude-opus-4-5"
 	ModelClaudeOpus46           ModelID = "claude-opus-4-6"
 	ModelClaudeOpus47           ModelID = "claude-opus-4-7"
 	ModelClaudeOpus48           ModelID = "claude-opus-4-8"
@@ -557,35 +554,43 @@ type InputJSONDelta struct{ PartialJSON string }
 func (InputJSONDelta) IsDelta() {}
 
 type Tool struct {
-	ID                  string
-	Name                string
-	Description         string
-	InputSchema         any
-	ArgsSchema          any
-	OutputSchema        any
-	CacheControl        *CacheControl
-	EagerInputStreaming *bool
-	Strict              *bool
-	DeferLoading        *bool
-	AllowedCallers      []ToolCallCaller
-	InputExamples       []any
-	Type                string
-	DisplayWidthPx      *int
-	DisplayHeightPx     *int
-	DisplayNumber       *int
-	EnableZoom          *bool
-	MaxCharacters       *int
-	MaxUses             *int
-	AllowedDomains      []string
-	BlockedDomains      []string
-	Citations           *CitationsConfig
-	MaxContentTokens    *int
-	UserLocation        *UserLocation
-	AdvisorModel        string
-	AdvisorMaxUses      *int
-	AdvisorCaching      *CachingConfig
-	Dynamic             bool
-	ProviderExecuted    bool
+	ID                  string                   `json:"id,omitempty"`
+	Name                string                   `json:"name,omitempty"`
+	Description         string                   `json:"description,omitempty"`
+	InputSchema         any                      `json:"input_schema,omitempty"`
+	ArgsSchema          any                      `json:"args_schema,omitempty"`
+	OutputSchema        any                      `json:"output_schema,omitempty"`
+	CacheControl        *CacheControl            `json:"cache_control,omitempty"`
+	EagerInputStreaming *bool                    `json:"eager_input_streaming,omitempty"`
+	Strict              *bool                    `json:"strict,omitempty"`
+	DeferLoading        *bool                    `json:"defer_loading,omitempty"`
+	AllowedCallers      []ToolCallCaller         `json:"allowed_callers,omitempty"`
+	InputExamples       []any                    `json:"input_examples,omitempty"`
+	Type                string                   `json:"type,omitempty"`
+	DisplayWidthPx      *int                     `json:"display_width_px,omitempty"`
+	DisplayHeightPx     *int                     `json:"display_height_px,omitempty"`
+	DisplayNumber       *int                     `json:"display_number,omitempty"`
+	EnableZoom          *bool                    `json:"enable_zoom,omitempty"`
+	MaxCharacters       *int                     `json:"max_characters,omitempty"`
+	MaxUses             *int                     `json:"max_uses,omitempty"`
+	AllowedDomains      []string                 `json:"allowed_domains,omitempty"`
+	BlockedDomains      []string                 `json:"blocked_domains,omitempty"`
+	Citations           *CitationsConfig         `json:"citations,omitempty"`
+	MaxContentTokens    *int                     `json:"max_content_tokens,omitempty"`
+	UserLocation        *UserLocation            `json:"user_location,omitempty"`
+	AdvisorModel        string                   `json:"advisor_model,omitempty"`
+	AdvisorMaxUses      *int                     `json:"advisor_max_uses,omitempty"`
+	AdvisorCaching      *CachingConfig           `json:"advisor_caching,omitempty"`
+	MCPServerName       string                   `json:"mcp_server_name,omitempty"`
+	DefaultConfig       *MCPToolConfig           `json:"default_config,omitempty"`
+	Configs             map[string]MCPToolConfig `json:"configs,omitempty"`
+	Dynamic             bool                     `json:"dynamic,omitempty"`
+	ProviderExecuted    bool                     `json:"provider_executed,omitempty"`
+}
+
+type MCPToolConfig struct {
+	Enabled      *bool `json:"enabled,omitempty"`
+	DeferLoading *bool `json:"defer_loading,omitempty"`
 }
 
 type ToolFactory func() Tool
@@ -651,9 +656,16 @@ const (
 )
 
 type OutputConfig struct {
-	Mode   StructuredOutputMode `json:"-"`
-	Format *ResponseFormat      `json:"format,omitempty"`
-	Schema any                  `json:"schema,omitempty"`
+	Mode       StructuredOutputMode `json:"-"`
+	Effort     string               `json:"effort,omitempty"`
+	Format     *ResponseFormat      `json:"format,omitempty"`
+	Schema     any                  `json:"schema,omitempty"`
+	TaskBudget *TokenTaskBudget     `json:"task_budget,omitempty"`
+}
+
+type TokenTaskBudget struct {
+	Type  string `json:"type"`
+	Total int    `json:"total"`
 }
 
 type StructuredOutput struct {
@@ -680,6 +692,6 @@ type UserLocation struct {
 type CachingConfig struct{ Enabled bool }
 
 type ResponseFormat struct {
-	Type   string
-	Schema any
+	Type   string `json:"type,omitempty"`
+	Schema any    `json:"schema,omitempty"`
 }

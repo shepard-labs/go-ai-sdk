@@ -85,7 +85,7 @@ func TestBuildRequest(t *testing.T) {
 	if req.Model != "claude-3-haiku-20240307" || req.MaxTokens != 100 || req.Stream {
 		t.Fatalf("request = %#v", req)
 	}
-	if *req.Temperature != 0.5 || *req.TopK != 3 || *req.TopP != 0.8 || req.StopSequences[0] != "stop" {
+	if *req.Temperature != 0.5 || *req.TopK != 3 || req.TopP != nil || req.StopSequences[0] != "stop" {
 		t.Fatalf("request params = %#v", req)
 	}
 	if len(warnings) != 1 {
@@ -119,7 +119,7 @@ func TestBuildRequestWithToolsAndToolChoice(t *testing.T) {
 	if len(req.Tools) != 1 || req.Tools[0].Name != "weather" || req.Tools[0].DeferLoading == nil || req.Tools[0].AllowedCallers[0] != "code" {
 		t.Fatalf("tools = %#v", req.Tools)
 	}
-	if req.ToolChoice.Type != "required" || req.ToolChoice.Name != "weather" || !req.DisableParallelToolUse {
+	if req.ToolChoice.Type != "tool" || req.ToolChoice.Name != "weather" || !req.ToolChoice.DisableParallelToolUse || !req.DisableParallelToolUse {
 		t.Fatalf("request = %#v", req)
 	}
 }
@@ -128,7 +128,21 @@ func TestBuildRequestWithProviderToolsAndModelOptions(t *testing.T) {
 	budget := 100
 	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{SendReasoning: true, DisableParallelToolUse: true, Effort: "xhigh", TaskBudget: &budget}).(*anthropicLanguageModel)
 	req, _ := model.buildRequest(GenerateOptions{Tools: []Tool{{ID: "anthropic.code_execution_20250522", Name: "code_execution_20250522", Type: "anthropic.code_execution_20250522", ProviderExecuted: true}}}, false)
-	if len(req.Tools) != 1 || req.Tools[0].ID != "anthropic.code_execution_20250522" || !req.SendReasoning || !req.DisableParallelToolUse || req.Effort != "xhigh" || *req.TaskBudget != 100 {
+	if len(req.Tools) != 1 || req.Tools[0].ID != "anthropic.code_execution_20250522" || req.ToolChoice.Type != "auto" || !req.ToolChoice.DisableParallelToolUse || !req.DisableParallelToolUse || req.OutputConfig.Effort != "xhigh" || req.OutputConfig.TaskBudget.Total != 100 {
+		t.Fatalf("request = %#v", req)
+	}
+}
+
+func TestBuildRequestWithStructuredOutputUsesOutputConfigJSONSchema(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-4-6").(*anthropicLanguageModel)
+	req, _ := model.buildRequest(GenerateOptions{StructuredOutput: &StructuredOutput{
+		Name:   "summary",
+		Schema: map[string]any{"type": "object", "properties": map[string]any{"title": map[string]any{"type": "string"}}},
+	}}, false)
+	if req.OutputConfig == nil || req.OutputConfig.Format == nil || req.OutputConfig.Format.Type != "json_schema" {
+		t.Fatalf("output_config = %#v", req.OutputConfig)
+	}
+	if len(req.Tools) != 0 || req.ToolChoice != nil {
 		t.Fatalf("request = %#v", req)
 	}
 }
@@ -176,8 +190,35 @@ func TestTemperatureClamping(t *testing.T) {
 func TestUnsupportedParameterWarnings(t *testing.T) {
 	value := 1.0
 	seed := 1
-	warnings := unsupportedWarnings(GenerateOptions{FrequencyPenalty: &value, PresencePenalty: &value, Seed: &seed, TopP: &value, Temperature: &value})
+	warnings := unsupportedWarnings(GenerateOptions{FrequencyPenalty: &value, PresencePenalty: &value, Seed: &seed, TopP: &value, Temperature: &value}, ModelCapabilities{})
 	if len(warnings) != 4 {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestBuildRequestOmitsTopPWhenTemperatureSet(t *testing.T) {
+	temperature := 0.2
+	topP := 0.9
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-4-5").(*anthropicLanguageModel)
+	req, warnings := model.buildRequest(GenerateOptions{Temperature: &temperature, TopP: &topP}, false)
+	if req.Temperature == nil || *req.Temperature != temperature || req.TopP != nil {
+		t.Fatalf("request = %#v", req)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestBuildRequestOmitsSamplingForModelsThatRejectIt(t *testing.T) {
+	temperature := 0.2
+	topP := 0.9
+	topK := 40
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-4-6").(*anthropicLanguageModel)
+	req, warnings := model.buildRequest(GenerateOptions{Temperature: &temperature, TopP: &topP, TopK: &topK}, false)
+	if req.Temperature != nil || req.TopP != nil || req.TopK != nil {
+		t.Fatalf("request = %#v", req)
+	}
+	if len(warnings) != 3 {
 		t.Fatalf("warnings = %#v", warnings)
 	}
 }

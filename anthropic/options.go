@@ -125,7 +125,7 @@ type MCPServer struct {
 	Name               string             `json:"name,omitempty"`
 	URL                string             `json:"url,omitempty"`
 	AuthorizationToken string             `json:"authorization_token,omitempty"`
-	ToolConfiguration  *ToolConfiguration `json:"tool_configuration,omitempty"`
+	ToolConfiguration  *ToolConfiguration `json:"-"`
 }
 
 type ToolConfiguration struct {

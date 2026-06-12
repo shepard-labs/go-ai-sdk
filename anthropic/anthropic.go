@@ -257,7 +257,7 @@ func betaHeadersForOptions(opts ModelOptions) []string {
 		add("files-api-2025-04-14")
 	}
 	if len(opts.MCPServers) > 0 {
-		add("mcp-client-2025-04-04")
+		add("mcp-client-2025-11-20")
 	}
 	if opts.ContextManagement != nil && len(opts.ContextManagement.Edits) > 0 {
 		add("context-management-2025-06-27")

@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -49,7 +50,7 @@ func TestStructuredOutputOutputFormatMode(t *testing.T) {
 	schema := map[string]any{"type": "object", "default": map[string]any{"bad": true}, "properties": map[string]any{"name": map[string]any{"type": "string"}}}
 	model := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-4-5", ModelOptions{StructuredOutputMode: StructuredOutputModeOutputFormat}).(*anthropicLanguageModel)
 	req, _ := model.buildRequest(GenerateOptions{StructuredOutput: &StructuredOutput{Name: "out", Schema: schema}}, false)
-	if req.OutputConfig == nil || req.OutputConfig.Format.Type != "json" || len(req.Tools) != 0 {
+	if req.OutputConfig == nil || req.OutputConfig.Format.Type != "json_schema" || len(req.Tools) != 0 {
 		t.Fatalf("request = %#v", req)
 	}
 	sanitized := req.OutputConfig.Format.Schema.(map[string]any)
@@ -61,7 +62,7 @@ func TestStructuredOutputOutputFormatMode(t *testing.T) {
 func TestStructuredOutputJsonToolMode(t *testing.T) {
 	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{StructuredOutputMode: StructuredOutputModeJSONTool}).(*anthropicLanguageModel)
 	req, _ := model.buildRequest(GenerateOptions{StructuredOutput: &StructuredOutput{Schema: map[string]any{"type": "object"}}}, false)
-	if len(req.Tools) != 1 || req.Tools[0].Name != "json" || req.ToolChoice.Type != "required" || req.ToolChoice.Name != "json" || !req.DisableParallelToolUse {
+	if len(req.Tools) != 1 || req.Tools[0].Name != "json" || req.ToolChoice.Type != "tool" || req.ToolChoice.Name != "json" || !req.ToolChoice.DisableParallelToolUse || !req.DisableParallelToolUse {
 		t.Fatalf("request = %#v", req)
 	}
 }
@@ -75,20 +76,27 @@ func TestStructuredOutputAutoMode(t *testing.T) {
 
 	unsupported := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{StructuredOutputMode: StructuredOutputModeAuto}).(*anthropicLanguageModel)
 	req, _ = unsupported.buildRequest(GenerateOptions{StructuredOutput: &StructuredOutput{Schema: map[string]any{"type": "object"}}}, false)
-	if req.OutputConfig != nil || len(req.Tools) != 1 || req.Tools[0].Name != "json" {
+	if req.OutputConfig == nil || req.OutputConfig.Format != nil || len(req.Tools) != 1 || req.Tools[0].Name != "json" {
 		t.Fatalf("unsupported request = %#v", req)
 	}
 }
 
 func TestSchemaSanitization(t *testing.T) {
-	schema := map[string]any{"$schema": "x", "type": "object", "properties": map[string]any{"x": map[string]any{"type": "string", "default": "bad", "examples": []any{"bad"}}}}
+	schema := map[string]any{"$schema": "x", "type": "object", "properties": map[string]any{"x": map[string]any{"type": "string", "default": "bad", "examples": []any{"bad"}}, "nested": map[string]any{"type": "object"}}}
 	sanitized := SanitizeSchema(schema).(map[string]any)
 	if _, ok := sanitized["$schema"]; ok {
+		t.Fatalf("schema = %#v", sanitized)
+	}
+	if sanitized["additionalProperties"] != false {
 		t.Fatalf("schema = %#v", sanitized)
 	}
 	property := sanitized["properties"].(map[string]any)["x"].(map[string]any)
 	if _, ok := property["default"]; ok {
 		t.Fatalf("property = %#v", property)
+	}
+	nested := sanitized["properties"].(map[string]any)["nested"].(map[string]any)
+	if nested["additionalProperties"] != false {
+		t.Fatalf("nested = %#v", nested)
 	}
 }
 
@@ -137,12 +145,18 @@ func TestMCPServerContainerAndContextRequest(t *testing.T) {
 	if req.MCPServers[0].ToolConfiguration.AllowedTools[0] != "tool" || req.Container.Skills[0].SkillID != "s" || len(req.ContextManagement.Edits) != 3 {
 		t.Fatalf("request = %#v", req)
 	}
+	if len(req.Tools) != 1 || req.Tools[0].Type != "mcp_toolset" || req.Tools[0].MCPServerName != "server" || req.Tools[0].DefaultConfig == nil || req.Tools[0].DefaultConfig.Enabled == nil || *req.Tools[0].DefaultConfig.Enabled || req.Tools[0].Configs["tool"].Enabled == nil || !*req.Tools[0].Configs["tool"].Enabled {
+		t.Fatalf("request = %#v", req)
+	}
 	data, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !json.Valid(data) {
 		t.Fatalf("invalid json: %s", data)
+	}
+	if bytes.Contains(data, []byte("tool_configuration")) {
+		t.Fatalf("deprecated tool_configuration serialized: %s", data)
 	}
 }
 

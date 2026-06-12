@@ -17,6 +17,11 @@ func sanitizeSchemaValue(value any, depth int) any {
 			}
 			out[key] = sanitizeSchemaValue(child, depth+1)
 		}
+		if out["type"] == "object" {
+			if _, ok := out["additionalProperties"]; !ok {
+				out["additionalProperties"] = false
+			}
+		}
 		return out
 	case []any:
 		out := make([]any, len(v))
