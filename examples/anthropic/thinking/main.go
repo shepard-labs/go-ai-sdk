@@ -25,7 +25,6 @@ func main() {
 			BudgetTokens: 1024,
 		},
 		Effort: "high",
-		Speed:  "fast",
 	})
 
 	result, err := model.DoGenerate(context.Background(), anthropic.GenerateOptions{

@@ -22,10 +22,6 @@ func main() {
 		Metadata: &anthropic.Metadata{UserID: "example-user-123"},
 	})
 
-	temperature := 0.2
-	topP := 0.9
-	topK := 40
-
 	result, err := model.DoGenerate(context.Background(), anthropic.GenerateOptions{
 		Messages: []anthropic.Message{
 			anthropic.UserMessage{Content: []anthropic.UserContent{
@@ -33,9 +29,6 @@ func main() {
 			}},
 		},
 		MaxTokens:     150,
-		Temperature:   &temperature,
-		TopP:          &topP,
-		TopK:          &topK,
 		StopSequences: []string{"END"},
 	})
 	if err != nil {
