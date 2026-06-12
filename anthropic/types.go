@@ -12,14 +12,10 @@ const Version = "0.1.0"
 type ModelID string
 
 const (
-	ModelClaudeHaiku45_20251001 ModelID = "claude-haiku-4-5-20251001"
-	ModelClaudeSonnet4          ModelID = "claude-sonnet-4"
-	ModelClaudeSonnet45         ModelID = "claude-sonnet-4-5"
-	ModelClaudeSonnet46         ModelID = "claude-sonnet-4-6"
-	ModelClaudeOpus4            ModelID = "claude-opus-4"
-	ModelClaudeOpus46           ModelID = "claude-opus-4-6"
-	ModelClaudeOpus47           ModelID = "claude-opus-4-7"
-	ModelClaudeOpus48           ModelID = "claude-opus-4-8"
+	ModelClaudeHaiku45  ModelID = "claude-haiku-4-5"
+	ModelClaudeSonnet46 ModelID = "claude-sonnet-4-6"
+	ModelClaudeOpus48   ModelID = "claude-opus-4-8"
+	ModelClaudeFable5   ModelID = "claude-fable-5"
 )
 
 type ModelCapabilities struct {
