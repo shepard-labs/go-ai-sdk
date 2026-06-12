@@ -176,16 +176,16 @@ func TestConvertProviderToolFileSearchMaxInt(t *testing.T) {
 func TestConvertProviderToolImageGeneration(t *testing.T) {
 	m := newTestChatModel()
 	out, _, err := m.convertProviderTool(Tool{Type: "provider", ID: "openai.imageGeneration", Args: map[string]any{
-		"background":    "opaque",
+		"background":     "opaque",
 		"inputImageMask": map[string]any{"image_url": "x"},
-		"model":         "gpt-image-1",
-		"moderation":    "auto",
-		"n":             float64(2),
-		"outputFormat":  "png",
-		"partialImages": float64(3),
-		"quality":       "high",
-		"size":          "1024x1024",
-		"user":          "u1",
+		"model":          "gpt-image-1",
+		"moderation":     "auto",
+		"n":              float64(2),
+		"outputFormat":   "png",
+		"partialImages":  float64(3),
+		"quality":        "high",
+		"size":           "1024x1024",
+		"user":           "u1",
 	}})
 	if err != nil {
 		t.Fatalf("err: %v", err)

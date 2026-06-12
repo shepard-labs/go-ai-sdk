@@ -9,9 +9,9 @@ import (
 // type from the spec's event mapping table is normalized correctly.
 func TestRealtimeParseAllServerEventTypes(t *testing.T) {
 	cases := []struct {
-		raw     string
-		want    RealtimeServerEventType
-		checks  func(t *testing.T, ev RealtimeServerEvent)
+		raw    string
+		want   RealtimeServerEventType
+		checks func(t *testing.T, ev RealtimeServerEvent)
 	}{
 		{
 			raw:  `{"type":"session.updated","session_id":"s1"}`,
@@ -292,10 +292,10 @@ func TestRealtimeSerializeAllClientEventTypes(t *testing.T) {
 		{
 			name: "conversation-item-truncate",
 			event: RealtimeClientEvent{
-				Type:        RealtimeClientConversationItemTruncate,
-				ItemID:      "i1",
+				Type:         RealtimeClientConversationItemTruncate,
+				ItemID:       "i1",
 				ContentIndex: intP(0),
-				AudioEndMs:  intP(500),
+				AudioEndMs:   intP(500),
 			},
 			contains: []string{
 				`"type":"conversation.item.truncate"`,

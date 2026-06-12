@@ -60,10 +60,6 @@ type ReasoningContent struct {
 func (ReasoningContent) IsAssistantContent() {}
 func (ReasoningContent) IsContent()          {}
 
-// openaiCompatReasoningContent is the embedded base for chat models that
-// only need text.
-type openaiCompatReasoningContent = openaicompatible.ReasoningContent
-
 // ToolCallContent is an assistant tool invocation.
 type ToolCallContent struct {
 	ToolCallContentEmbed
@@ -101,7 +97,7 @@ type ToolResultContent struct {
 	ProviderMetadata ProviderMetadata
 }
 
-func (ToolResultContent) IsContent()    {}
+func (ToolResultContent) IsContent()     {}
 func (ToolResultContent) IsToolContent() {}
 
 // ToolResultOutput is the typed payload of a tool result.
@@ -216,7 +212,7 @@ type StreamResponseMetadata = openaicompatible.StreamResponseMetadata
 
 // StreamTextStart marks the start of a text part.
 type StreamTextStart struct {
-	ID              string
+	ID               string
 	ProviderMetadata ProviderMetadata
 }
 
@@ -224,8 +220,8 @@ func (StreamTextStart) IsStreamPart() {}
 
 // StreamTextDelta is a text delta.
 type StreamTextDelta struct {
-	ID              string
-	Text            string
+	ID               string
+	Text             string
 	ProviderMetadata ProviderMetadata
 }
 
@@ -234,7 +230,7 @@ func (StreamTextDelta) IsDelta()      {}
 
 // StreamTextEnd marks the end of a text part.
 type StreamTextEnd struct {
-	ID              string
+	ID               string
 	ProviderMetadata ProviderMetadata
 }
 
@@ -242,7 +238,7 @@ func (StreamTextEnd) IsStreamPart() {}
 
 // StreamReasoningStart marks the start of a reasoning part.
 type StreamReasoningStart struct {
-	ID              string
+	ID               string
 	ProviderMetadata ProviderMetadata
 }
 
@@ -250,8 +246,8 @@ func (StreamReasoningStart) IsStreamPart() {}
 
 // StreamReasoningDelta is a reasoning delta.
 type StreamReasoningDelta struct {
-	ID              string
-	Text            string
+	ID               string
+	Text             string
 	ProviderMetadata ProviderMetadata
 }
 
@@ -260,7 +256,7 @@ func (StreamReasoningDelta) IsDelta()      {}
 
 // StreamReasoningEnd marks the end of a reasoning part.
 type StreamReasoningEnd struct {
-	ID              string
+	ID               string
 	ProviderMetadata ProviderMetadata
 }
 
@@ -268,8 +264,8 @@ func (StreamReasoningEnd) IsStreamPart() {}
 
 // StreamToolInputStart marks the start of a tool-call input part.
 type StreamToolInputStart struct {
-	ID              string
-	ToolName        string
+	ID               string
+	ToolName         string
 	ProviderMetadata ProviderMetadata
 }
 
@@ -277,8 +273,8 @@ func (StreamToolInputStart) IsStreamPart() {}
 
 // StreamToolInputDelta is a tool-call input delta.
 type StreamToolInputDelta struct {
-	ID              string
-	Delta           string
+	ID               string
+	Delta            string
 	ProviderMetadata ProviderMetadata
 }
 
@@ -287,7 +283,7 @@ func (StreamToolInputDelta) IsDelta()      {}
 
 // StreamToolInputEnd marks the end of a tool-call input part.
 type StreamToolInputEnd struct {
-	ID              string
+	ID               string
 	ProviderMetadata ProviderMetadata
 }
 
@@ -339,10 +335,10 @@ func (StreamCompactionEnd) IsStreamPart() {}
 // SourceContent is a source/annotation part attached to a generated text
 // (web citation, file citation, etc.).
 type SourceContent struct {
-	SourceType string
-	ID         string
-	URL        string
-	Title      string
+	SourceType       string
+	ID               string
+	URL              string
+	Title            string
 	ProviderMetadata ProviderMetadata
 	ProviderOptions  ProviderMetadata
 }
@@ -367,12 +363,12 @@ type ImageGenerateOptions = openaicompatible.ImageGenerateOptions
 
 // SpeechGenerateOptions carries parameters for a speech synthesis call.
 type SpeechGenerateOptions struct {
-	Text           string
-	Voice          string
-	OutputFormat   string
-	Speed          *float64
-	Instructions   *string
-	Headers        http.Header
+	Text            string
+	Voice           string
+	OutputFormat    string
+	Speed           *float64
+	Instructions    *string
+	Headers         http.Header
 	ProviderOptions ProviderOptions
 }
 
@@ -395,16 +391,16 @@ type SpeechResponseMetadata struct {
 
 // TranscriptionOptions carries parameters for a transcription call.
 type TranscriptionOptions struct {
-	Audio                 []byte
-	MediaType             string
-	Filename              string
-	Language              *string
-	Prompt                *string
-	Temperature           *float64
+	Audio                  []byte
+	MediaType              string
+	Filename               string
+	Language               *string
+	Prompt                 *string
+	Temperature            *float64
 	TimestampGranularities []string
-	Include               []string
-	Headers               http.Header
-	ProviderOptions       ProviderOptions
+	Include                []string
+	Headers                http.Header
+	ProviderOptions        ProviderOptions
 }
 
 // TranscriptionResult is the result of a transcription call.
@@ -547,6 +543,3 @@ type RealtimeToolDefinition struct {
 // RegexpPattern is a regular expression URL match (used by the underlying
 // openaicompatible package).
 type RegexpPattern = regexp.Regexp
-
-// jsonRaw is a convenience for raw JSON values used internally.
-type jsonRaw = json.RawMessage

@@ -205,19 +205,19 @@ func TestVoiceConstants(t *testing.T) {
 // Verifies that mediaTypeToExtension handles common audio types.
 func TestMediaTypeToExtension(t *testing.T) {
 	cases := map[string]string{
-		"audio/mpeg":  "mp3",
-		"audio/mp3":   "mp3",
-		"audio/wav":   "wav",
-		"audio/webm":  "webm",
-		"audio/ogg":   "ogg",
-		"audio/flac":  "flac",
-		"audio/aac":   "aac",
-		"audio/opus":  "opus",
-		"audio/pcm":   "pcm",
-		"audio/mp4":   "m4a",
-		"audio/m4a":   "m4a",
-		"audio/mpga":  "mpga",
-		"unknown":     "mp3", // default
+		"audio/mpeg": "mp3",
+		"audio/mp3":  "mp3",
+		"audio/wav":  "wav",
+		"audio/webm": "webm",
+		"audio/ogg":  "ogg",
+		"audio/flac": "flac",
+		"audio/aac":  "aac",
+		"audio/opus": "opus",
+		"audio/pcm":  "pcm",
+		"audio/mp4":  "m4a",
+		"audio/m4a":  "m4a",
+		"audio/mpga": "mpga",
+		"unknown":    "mp3", // default
 	}
 	for mediaType, want := range cases {
 		if got := mediaTypeToExtension(mediaType); got != want {

@@ -3,7 +3,6 @@ package openai
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -348,6 +347,3 @@ func (m *multipartJSONFetcher) Do(req *http.Request) (*http.Response, error) {
 		Body:       io.NopCloser(strings.NewReader(m.body)),
 	}, nil
 }
-
-// errEOF is the standard "end of file" error used by io.Reader test stubs.
-var errEOF = errors.New("EOF")

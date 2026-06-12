@@ -294,7 +294,7 @@ func TestProcessChatStreamDeltaAnnotation(t *testing.T) {
 	m.processChatStreamDelta(ch, state, chatStreamDelta{
 		Annotations: []map[string]any{
 			{
-				"type":        "url_citation",
+				"type":         "url_citation",
 				"url_citation": map[string]any{"uuid": "u1", "url": "https://a.com", "title": "A"},
 			},
 		},

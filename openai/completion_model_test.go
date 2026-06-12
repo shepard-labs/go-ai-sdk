@@ -82,9 +82,9 @@ func TestCompletionRequestWithPenalties(t *testing.T) {
 	fp := 0.5
 	pp := 0.25
 	result, err := p.Completion("gpt-3.5-turbo-instruct").DoGenerate(context.Background(), GenerateOptions{
-		Messages:          []Message{UserMessage{Content: []UserContent{TextContent{Text: "x"}}}},
-		FrequencyPenalty:  &fp,
-		PresencePenalty:   &pp,
+		Messages:         []Message{UserMessage{Content: []UserContent{TextContent{Text: "x"}}}},
+		FrequencyPenalty: &fp,
+		PresencePenalty:  &pp,
 	})
 	if err != nil {
 		t.Fatalf("DoGenerate: %v", err)

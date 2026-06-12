@@ -32,14 +32,14 @@ type ResponsesGenerateOptions struct {
 	StopSequences   []string
 
 	// Reasoning.
-	Reasoning       *ReasoningConfig
-	ForceReasoning  *bool
+	Reasoning      *ReasoningConfig
+	ForceReasoning *bool
 
 	// Standard prompt payload.
-	Messages        []Message
-	Tools           []Tool
-	ToolChoice      *ToolChoice
-	ResponseFormat  *ResponseFormat
+	Messages         []Message
+	Tools            []Tool
+	ToolChoice       *ToolChoice
+	ResponseFormat   *ResponseFormat
 	StructuredOutput *StructuredOutput
 
 	// I/O.

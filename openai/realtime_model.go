@@ -100,20 +100,20 @@ func (m *openaiRealtimeModel) GetWebSocketConfig(opts WebSocketConfigInput) WebS
 
 func (m *openaiRealtimeModel) ParseServerEvent(raw []byte) RealtimeServerEvent {
 	var envelope struct {
-		Type        string          `json:"type"`
-		SessionID   string          `json:"session_id"`
-		ItemID      string          `json:"item_id"`
-		PreviousItemID string       `json:"previous_item_id"`
-		Item        json.RawMessage `json:"item"`
-		Transcript  string          `json:"transcript"`
-		ResponseID  string          `json:"response_id"`
-		Status      string          `json:"status"`
-		CallID      string          `json:"call_id"`
-		Delta       string          `json:"delta"`
-		Name        string          `json:"name"`
-		Arguments   string          `json:"arguments"`
-		Text        string          `json:"text"`
-		Error       *struct {
+		Type           string          `json:"type"`
+		SessionID      string          `json:"session_id"`
+		ItemID         string          `json:"item_id"`
+		PreviousItemID string          `json:"previous_item_id"`
+		Item           json.RawMessage `json:"item"`
+		Transcript     string          `json:"transcript"`
+		ResponseID     string          `json:"response_id"`
+		Status         string          `json:"status"`
+		CallID         string          `json:"call_id"`
+		Delta          string          `json:"delta"`
+		Name           string          `json:"name"`
+		Arguments      string          `json:"arguments"`
+		Text           string          `json:"text"`
+		Error          *struct {
 			Message string `json:"message"`
 			Code    string `json:"code"`
 		} `json:"error"`

@@ -5,9 +5,9 @@ type ApplyPatchArgs struct{}
 
 // CustomToolArgs is the configuration for the custom provider tool.
 type CustomToolArgs struct {
-	Description string             `json:"description,omitempty"`
-	Format      *CustomToolFormat  `json:"format,omitempty"`
-	Name        string             `json:"name,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Format      *CustomToolFormat `json:"format,omitempty"`
+	Name        string            `json:"name,omitempty"`
 }
 
 // CustomToolFormat specifies a custom tool's grammar/text format.
@@ -30,10 +30,10 @@ type CodeInterpreterContainer struct {
 
 // FileSearchArgs is the configuration for the file_search provider tool.
 type FileSearchArgs struct {
-	VectorStoreIDs []string             `json:"vectorStoreIDs,omitempty"`
-	MaxNumResults  *int                 `json:"maxNumResults,omitempty"`
-	Ranking        *FileSearchRanking   `json:"ranking,omitempty"`
-	Filters        any                  `json:"filters,omitempty"`
+	VectorStoreIDs []string           `json:"vectorStoreIDs,omitempty"`
+	MaxNumResults  *int               `json:"maxNumResults,omitempty"`
+	Ranking        *FileSearchRanking `json:"ranking,omitempty"`
+	Filters        any                `json:"filters,omitempty"`
 }
 
 // FileSearchRanking configures file_search ranking options.
@@ -44,16 +44,16 @@ type FileSearchRanking struct {
 
 // ImageGenerationArgs is the configuration for the image_generation provider tool.
 type ImageGenerationArgs struct {
-	Background        *string           `json:"background,omitempty"`
-	InputFidelity     *string           `json:"inputFidelity,omitempty"`
+	Background        *string            `json:"background,omitempty"`
+	InputFidelity     *string            `json:"inputFidelity,omitempty"`
 	InputImageMask    *ImageGenInputMask `json:"inputImageMask,omitempty"`
-	Model             *string           `json:"model,omitempty"`
-	Moderation        *string           `json:"moderation,omitempty"`
-	OutputCompression *int              `json:"outputCompression,omitempty"`
-	OutputFormat      *string           `json:"outputFormat,omitempty"`
-	PartialImages     *int              `json:"partialImages,omitempty"`
-	Quality           *string           `json:"quality,omitempty"`
-	Size              *string           `json:"size,omitempty"`
+	Model             *string            `json:"model,omitempty"`
+	Moderation        *string            `json:"moderation,omitempty"`
+	OutputCompression *int               `json:"outputCompression,omitempty"`
+	OutputFormat      *string            `json:"outputFormat,omitempty"`
+	PartialImages     *int               `json:"partialImages,omitempty"`
+	Quality           *string            `json:"quality,omitempty"`
+	Size              *string            `json:"size,omitempty"`
 }
 
 // ImageGenInputMask is a mask for image_generation.
@@ -72,13 +72,13 @@ type ShellArgs struct {
 
 // ShellEnvironment is the shell environment configuration.
 type ShellEnvironment struct {
-	Type          string               `json:"type,omitempty"`
-	FileIDs       []string             `json:"fileIds,omitempty"`
-	MemoryLimit   *string              `json:"memoryLimit,omitempty"`
-	NetworkPolicy *ShellNetworkPolicy  `json:"networkPolicy,omitempty"`
-	Skills        []ShellSkill         `json:"skills,omitempty"`
-	ContainerID   *string              `json:"containerId,omitempty"`
-	LocalSkills   []ShellLocalSkill    `json:"localSkills,omitempty"`
+	Type          string              `json:"type,omitempty"`
+	FileIDs       []string            `json:"fileIds,omitempty"`
+	MemoryLimit   *string             `json:"memoryLimit,omitempty"`
+	NetworkPolicy *ShellNetworkPolicy `json:"networkPolicy,omitempty"`
+	Skills        []ShellSkill        `json:"skills,omitempty"`
+	ContainerID   *string             `json:"containerId,omitempty"`
+	LocalSkills   []ShellLocalSkill   `json:"localSkills,omitempty"`
 }
 
 // ShellNetworkPolicy is the network policy for a shell environment.
@@ -91,10 +91,10 @@ type ShellNetworkPolicy struct {
 
 // ShellSkill is a reference to a remote skill available to a shell.
 type ShellSkill struct {
-	Type              string             `json:"type,omitempty"`
-	ProviderReference ProviderReference  `json:"providerReference,omitempty"`
-	Name              string             `json:"name,omitempty"`
-	Description       string             `json:"description,omitempty"`
+	Type              string            `json:"type,omitempty"`
+	ProviderReference ProviderReference `json:"providerReference,omitempty"`
+	Name              string            `json:"name,omitempty"`
+	Description       string            `json:"description,omitempty"`
 }
 
 // ShellLocalSkill is a local skill attached to a local shell environment.

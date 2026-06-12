@@ -14,8 +14,12 @@ func TestModelCapabilitiesForIDSpecExamples(t *testing.T) {
 		{"gpt-4o", func(c Capabilities) bool { return !c.IsReasoningModel && c.SystemMessageMode == "system" }, "gpt-4o → IsReasoningModel: false, SystemMessageMode: system"},
 		{"custom-fine-tune", func(c Capabilities) bool { return !c.IsReasoningModel && c.SystemMessageMode == "system" }, "custom-fine-tune → IsReasoningModel: false (allowlist default)"},
 		{"o1", func(c Capabilities) bool { return c.IsReasoningModel && c.SystemMessageMode == "developer" }, "o1 → reasoning"},
-		{"o3", func(c Capabilities) bool { return c.IsReasoningModel && c.SupportsFlexProcessing && c.SupportsPriorityProcessing }, "o3 → reasoning, flex, priority"},
-		{"o4-mini", func(c Capabilities) bool { return c.IsReasoningModel && c.SupportsFlexProcessing && c.SupportsPriorityProcessing }, "o4-mini → reasoning, flex, priority"},
+		{"o3", func(c Capabilities) bool {
+			return c.IsReasoningModel && c.SupportsFlexProcessing && c.SupportsPriorityProcessing
+		}, "o3 → reasoning, flex, priority"},
+		{"o4-mini", func(c Capabilities) bool {
+			return c.IsReasoningModel && c.SupportsFlexProcessing && c.SupportsPriorityProcessing
+		}, "o4-mini → reasoning, flex, priority"},
 		{"gpt-5-nano", func(c Capabilities) bool { return c.IsReasoningModel && !c.SupportsPriorityProcessing }, "gpt-5-nano → reasoning, no priority"},
 		{"gpt-5-chat-latest", func(c Capabilities) bool { return !c.IsReasoningModel }, "gpt-5-chat-latest → not reasoning (chat variant)"},
 		{"gpt-5.1-chat-latest", func(c Capabilities) bool { return !c.IsReasoningModel }, "gpt-5.1-chat-latest → not reasoning"},

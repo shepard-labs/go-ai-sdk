@@ -26,8 +26,8 @@ func newResponsesModel(p *openaiProvider, modelID string) ResponsesModel {
 	return &openaiResponsesModel{provider: p, modelID: modelID}
 }
 
-func (m *openaiResponsesModel) ModelID() string  { return m.modelID }
-func (m *openaiResponsesModel) Provider() string { return "openai.responses" }
+func (m *openaiResponsesModel) ModelID() string                          { return m.modelID }
+func (m *openaiResponsesModel) Provider() string                         { return "openai.responses" }
 func (m *openaiResponsesModel) SupportURLs() map[string][]*regexp.Regexp { return nil }
 
 // DoGenerate performs a non-streaming Responses call.
@@ -299,10 +299,10 @@ func buildResponsesStructuredFormat(s *StructuredOutput) map[string]any {
 		name = "response"
 	}
 	schema := map[string]any{
-		"type":    "json_schema",
-		"strict":  true,
-		"name":    name,
-		"schema":  s.Schema,
+		"type":   "json_schema",
+		"strict": true,
+		"name":   name,
+		"schema": s.Schema,
 	}
 	if s.Description != "" {
 		schema["description"] = s.Description
@@ -1038,9 +1038,9 @@ func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMes
 			out = append(out, item)
 		case ToolApprovalResponse:
 			item := map[string]any{
-				"type":        "mcp_approval_response",
+				"type":                "mcp_approval_response",
 				"approval_request_id": part.ApprovalID,
-				"approve":      part.Approve,
+				"approve":             part.Approve,
 			}
 			if part.Reason != "" {
 				item["reason"] = part.Reason
@@ -1069,22 +1069,22 @@ func (m *openaiResponsesModel) convertResponsesToolMessage(msg ToolMessage) ([]a
 		switch part.ToolName {
 		case "local_shell":
 			out = append(out, map[string]any{
-				"type":     "local_shell_call_output",
-				"call_id":  part.ToolCallID,
-				"output":   stringifyToolResult(part.Output),
+				"type":    "local_shell_call_output",
+				"call_id": part.ToolCallID,
+				"output":  stringifyToolResult(part.Output),
 			})
 		case "shell":
 			out = append(out, map[string]any{
-				"type":     "shell_call_output",
-				"call_id":  part.ToolCallID,
-				"output":   buildShellCallOutputArray(part.Output),
+				"type":    "shell_call_output",
+				"call_id": part.ToolCallID,
+				"output":  buildShellCallOutputArray(part.Output),
 			})
 		case "apply_patch":
 			out = append(out, map[string]any{
-				"type":     "apply_patch_call_output",
-				"call_id":  part.ToolCallID,
-				"status":   "completed",
-				"output":   stringifyToolResult(part.Output),
+				"type":    "apply_patch_call_output",
+				"call_id": part.ToolCallID,
+				"status":  "completed",
+				"output":  stringifyToolResult(part.Output),
 			})
 		case "tool_search":
 			out = append(out, map[string]any{
@@ -1096,9 +1096,9 @@ func (m *openaiResponsesModel) convertResponsesToolMessage(msg ToolMessage) ([]a
 			})
 		default:
 			out = append(out, map[string]any{
-				"type":     "function_call_output",
-				"call_id":  part.ToolCallID,
-				"output":   stringifyToolResult(part.Output),
+				"type":    "function_call_output",
+				"call_id": part.ToolCallID,
+				"output":  stringifyToolResult(part.Output),
 			})
 		}
 	}

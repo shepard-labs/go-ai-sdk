@@ -69,15 +69,15 @@ func TestAPICallErrorCarriesFields(t *testing.T) {
 	headers := http.Header{"x-request-id": []string{"req-1"}}
 	body := []byte(`{"error":{"message":"bad","type":"bad_request","code":"bad"}}`)
 	api := &APICallError{
-		Message:    "bad",
-		Type:       "bad_request",
-		Code:       "bad",
-		Status:     400,
-		Headers:    headers,
-		RequestID:  "req-1",
-		Body:       body,
-		Retryable:  false,
-		Truncated:  false,
+		Message:   "bad",
+		Type:      "bad_request",
+		Code:      "bad",
+		Status:    400,
+		Headers:   headers,
+		RequestID: "req-1",
+		Body:      body,
+		Retryable: false,
+		Truncated: false,
 	}
 	if api.Type != "bad_request" {
 		t.Errorf("Type: %q", api.Type)

@@ -72,8 +72,8 @@ func TestRealtimeSessionConfigServerVADMapping(t *testing.T) {
 	sess := p.ExperimentalRealtime().RealtimeModel("gpt-realtime").BuildSessionConfig(SessionConfig{
 		InputAudioFormat: &AudioFormat{Type: "audio/pcm"},
 		TurnDetection: &TurnDetection{
-			Type:             "server-vad",
-			Threshold:        &threshold,
+			Type:              "server-vad",
+			Threshold:         &threshold,
 			SilenceDurationMs: &silence,
 			PrefixPaddingMs:   &prefix,
 		},

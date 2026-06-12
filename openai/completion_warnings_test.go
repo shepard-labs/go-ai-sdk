@@ -82,7 +82,7 @@ func TestCompletionWarnsOnToolChoice(t *testing.T) {
 // a warning when ResponseFormat is JSON.
 func TestCompletionWarnsOnJsonResponseFormat(t *testing.T) {
 	res, _ := runCompletionWith(t, GenerateOptions{
-		Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}},
+		Messages:       []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}},
 		ResponseFormat: &ResponseFormat{Type: "json"},
 	})
 	found := false

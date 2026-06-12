@@ -30,7 +30,7 @@ func TestConvertChatToolCallFromResponseValid(t *testing.T) {
 			"arguments": `{"q":"x"}`,
 		},
 		"provider_executed": true,
-		"dynamic":          true,
+		"dynamic":           true,
 	}
 	got, err := convertChatToolCallFromResponse(tc)
 	if err != nil {
@@ -352,4 +352,3 @@ func TestStringValue(t *testing.T) {
 		t.Errorf("nil: %q", got)
 	}
 }
-

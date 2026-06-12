@@ -35,11 +35,10 @@ type responsesTextAccum struct {
 }
 
 type responsesToolAccum struct {
-	id          string
-	name        string
-	input       strings.Builder
-	toolName    string
-	started     bool
+	id       string
+	input    strings.Builder
+	toolName string
+	started  bool
 }
 
 type responsesReasonAccum struct {
@@ -54,9 +53,9 @@ func newResponsesStreamState() *responsesStreamState {
 	return &responsesStreamState{
 		text:        map[string]*responsesTextAccum{},
 		tools:       map[string]*responsesToolAccum{},
-		reasoning:    map[string]*responsesReasonAccum{},
-		approvals:    map[string]*responsesApprovalAccum{},
-		annotations:  map[string][]map[string]any{},
+		reasoning:   map[string]*responsesReasonAccum{},
+		approvals:   map[string]*responsesApprovalAccum{},
+		annotations: map[string][]map[string]any{},
 	}
 }
 

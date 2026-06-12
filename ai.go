@@ -171,9 +171,9 @@ var Default = CreateRouter(RouterSettings{
 // underlying value is one of AnthropicResult or OpenAIResult;
 // type-switch on Kind and use the corresponding Value field.
 type RouterResult struct {
-	Kind       ResultKind
-	Anthropic  *AnthropicResult
-	OpenAI     *OpenAIResult
+	Kind      ResultKind
+	Anthropic *AnthropicResult
+	OpenAI    *OpenAIResult
 }
 
 // ResultKind identifies which provider produced a RouterResult.
@@ -340,14 +340,14 @@ func (r *Router) callHaiku(ctx context.Context, userPrompt string) (Selection, e
 	}
 	allowed, ok := r.catalog[d.Provider]
 	if !ok {
-		return Selection{Provider: d.Provider, Model: d.Model, Reason: d.Reason},
+		return Selection(d),
 			&NoSuchProviderError{Provider: d.Provider, Known: r.knownProviders()}
 	}
 	if !containsString(allowed, d.Model) {
-		return Selection{Provider: d.Provider, Model: d.Model, Reason: d.Reason},
+		return Selection(d),
 			fmt.Errorf("%w: provider=%q model=%q", ErrUnknownModel, d.Provider, d.Model)
 	}
-	return Selection{Provider: d.Provider, Model: d.Model, Reason: d.Reason}, nil
+	return Selection(d), nil
 }
 
 func (r *Router) knownProviders() []string {

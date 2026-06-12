@@ -203,11 +203,11 @@ func TestRealtimeBuildSessionConfigIncludesToolsAndAudio(t *testing.T) {
 	f := &recordingFetcher{}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	cfg := SessionConfig{
-		Instructions:     "test",
-		OutputModalities: []string{"text", "audio"},
-		InputAudioFormat: &AudioFormat{Type: "audio/pcm"},
+		Instructions:      "test",
+		OutputModalities:  []string{"text", "audio"},
+		InputAudioFormat:  &AudioFormat{Type: "audio/pcm"},
 		OutputAudioFormat: &AudioFormat{Type: "audio/pcm"},
-		Voice:            "alloy",
+		Voice:             "alloy",
 		Tools: []RealtimeToolDefinition{
 			{Type: "function", Name: "f", Description: "d", Parameters: map[string]any{}},
 		},

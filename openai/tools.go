@@ -4,7 +4,9 @@ package openai
 type openaiTools struct{}
 
 // ApplyPatch returns the apply_patch provider tool.
-func ApplyPatch() Tool { return Tool{Type: "provider", ID: "openai.apply_patch", Args: ApplyPatchArgs{}} }
+func ApplyPatch() Tool {
+	return Tool{Type: "provider", ID: "openai.apply_patch", Args: ApplyPatchArgs{}}
+}
 
 // CustomTool returns a custom provider tool.
 func CustomTool(description string, format *CustomToolFormat) Tool {
@@ -27,7 +29,9 @@ func ImageGeneration(args ImageGenerationArgs) Tool {
 }
 
 // LocalShell returns the local_shell provider tool.
-func LocalShell() Tool { return Tool{Type: "provider", ID: "openai.local_shell", Args: LocalShellArgs{}} }
+func LocalShell() Tool {
+	return Tool{Type: "provider", ID: "openai.local_shell", Args: LocalShellArgs{}}
+}
 
 // Shell returns the shell provider tool.
 func Shell(args ShellArgs) Tool { return Tool{Type: "provider", ID: "openai.shell", Args: args} }

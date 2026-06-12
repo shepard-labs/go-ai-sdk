@@ -38,8 +38,8 @@ func TestSpeechGenerateInstructionsDroppedForTts1(t *testing.T) {
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	instructions := "speak slowly"
 	res, err := p.Speech("tts-1").DoGenerate(context.Background(), SpeechGenerateOptions{
-		Text:        "hi",
-		Voice:       "alloy",
+		Text:         "hi",
+		Voice:        "alloy",
 		Instructions: &instructions,
 	})
 	if err != nil {

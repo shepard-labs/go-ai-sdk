@@ -11,14 +11,8 @@ import (
 // also surfaces the interface membership at runtime for documentation.
 func TestContentUnionMarkerMethods(t *testing.T) {
 	// User content
-	var uc openaicompatible.UserContent = TextContent{Text: "x"}
-	if _, ok := uc.(openaicompatible.UserContent); !ok {
-		t.Errorf("TextContent should implement UserContent")
-	}
-	var uc2 openaicompatible.UserContent = CustomContent{Kind: "k", Data: 1}
-	if _, ok := uc2.(openaicompatible.UserContent); !ok {
-		t.Errorf("CustomContent should implement UserContent")
-	}
+	_ = openaicompatible.UserContent(TextContent{Text: "x"})
+	_ = openaicompatible.UserContent(CustomContent{Kind: "k", Data: 1})
 
 	// Assistant content
 	var ac openaicompatible.AssistantContent = TextContent{Text: "x"}

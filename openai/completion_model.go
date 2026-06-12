@@ -242,7 +242,7 @@ func (m *openaiCompletionLanguageModel) runCompletionStream(ctx context.Context,
 			return false
 		}
 		if len(chunk.Choices) > 0 {
-			if state.textStart == false {
+			if !state.textStart {
 				parts <- StreamTextStart{ID: "txt-0"}
 				state.textStart = true
 			}

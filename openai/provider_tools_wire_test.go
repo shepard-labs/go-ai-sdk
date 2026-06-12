@@ -309,7 +309,6 @@ func TestProviderToolMCPRequireApprovalToolNames(t *testing.T) {
 	}
 }
 
-
 func TestProviderToolShell(t *testing.T) {
 	body := runResponsesWithTools(t, []Tool{
 		{Type: "provider", ID: "openai.shell", Args: ShellArgs{
@@ -447,14 +446,14 @@ func TestProviderToolWebSearchPreview(t *testing.T) {
 // TestCamelToSnake verifies the helper for the MCP tool key conversion.
 func TestCamelToSnake(t *testing.T) {
 	cases := map[string]string{
-		"serverLabel":      "server_label",
-		"serverUrl":        "server_url",
-		"allowedTools":     "allowed_tools",
-		"connectorId":      "connector_id",
-		"requireApproval":  "require_approval",
+		"serverLabel":       "server_label",
+		"serverUrl":         "server_url",
+		"allowedTools":      "allowed_tools",
+		"connectorId":       "connector_id",
+		"requireApproval":   "require_approval",
 		"serverDescription": "server_description",
-		"foo":              "foo",
-		"":                "",
+		"foo":               "foo",
+		"":                  "",
 	}
 	for in, want := range cases {
 		if got := camelToSnake(in); got != want {

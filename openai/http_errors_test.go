@@ -81,7 +81,7 @@ func TestRetryDelayExponentialBackoff(t *testing.T) {
 	p := newOpenAIForTest(&recordingFetcher{}, "https://example.test/v1")
 	// Use jitter=off to make the test deterministic.
 	p.retry.Jitter = false
-	p.retry.BaseDelay = 1_000_000   // 1ms
+	p.retry.BaseDelay = 1_000_000    // 1ms
 	p.retry.MaxDelay = 1_000_000_000 // 1s
 	d0 := p.retryDelay(0)
 	d1 := p.retryDelay(1)

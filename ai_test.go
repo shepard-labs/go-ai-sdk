@@ -42,11 +42,11 @@ func textResponse(status int, body string) *http.Response {
 // claude-haiku-4-5 call with outputFormat would produce.
 func routingResponseBody(payload string) string {
 	resp := map[string]any{
-		"id":         "msg_routing",
-		"type":       "message",
-		"role":       "assistant",
-		"model":      "claude-haiku-4-5-20251001",
-		"content":    []map[string]any{{"type": "text", "text": payload}},
+		"id":          "msg_routing",
+		"type":        "message",
+		"role":        "assistant",
+		"model":       "claude-haiku-4-5-20251001",
+		"content":     []map[string]any{{"type": "text", "text": payload}},
 		"stop_reason": "end_turn",
 		"usage":       map[string]any{"input_tokens": 50, "output_tokens": 20},
 	}
@@ -58,11 +58,11 @@ func routingResponseBody(payload string) string {
 // when it picked a non-Haiku model.
 func anthropicTextResponse(model, text string) string {
 	resp := map[string]any{
-		"id":         "msg_a",
-		"type":       "message",
-		"role":       "assistant",
-		"model":      model,
-		"content":    []map[string]any{{"type": "text", "text": text}},
+		"id":          "msg_a",
+		"type":        "message",
+		"role":        "assistant",
+		"model":       model,
+		"content":     []map[string]any{{"type": "text", "text": text}},
 		"stop_reason": "end_turn",
 		"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
 	}
@@ -81,47 +81,6 @@ func openaiChatResponse(model, content string) string {
 	}
 	b, _ := json.Marshal(resp)
 	return string(b)
-}
-
-func newTestRouter(anthropicBody, downstreamBody string) (*Router, *int, []string) {
-	var hits int
-	var paths []string
-	fetcher := roundTripFetcher{fn: func(req *http.Request) (*http.Response, error) {
-		hits++
-		paths = append(paths, req.URL.Path)
-		if strings.HasSuffix(req.URL.Path, "/messages") {
-			// We don't know whether this is the routing call or the
-			// downstream call — both go to /messages on the
-			// anthropic base URL. The routing call's body contains
-			// the structured-output format marker
-			// `format":{"type":"json_schema"`. The downstream
-			// call may carry an `output_config.effort` but no
-			// `format` field.
-			body, _ := io.ReadAll(req.Body)
-			if strings.Contains(string(body), `format":{"type":"json_schema"`) {
-				return jsonResponse(200, anthropicBody), nil
-			}
-			return jsonResponse(200, downstreamBody), nil
-		}
-		return jsonResponse(200, downstreamBody), nil
-	}}
-	r := CreateRouter(RouterSettings{
-		Anthropic: anthropic.CreateAnthropic(anthropic.ProviderSettings{
-			APIKey:  "key",
-			BaseURL: "https://anthropic.test",
-			Fetch:   fetcher,
-		}),
-		OpenAI: openai.CreateOpenAI(openai.ProviderSettings{
-			APIKey:  "key",
-			BaseURL: "https://openai.test",
-			Fetch:   fetcher,
-		}),
-		Catalog: ProviderCatalog{
-			"anthropic": {"claude-haiku-4-5-20251001", "claude-sonnet-4-5"},
-			"openai":    {"gpt-5"},
-		},
-	})
-	return r, &hits, paths
 }
 
 // ----------------------------------------------------------------------------

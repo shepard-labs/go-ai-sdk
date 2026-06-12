@@ -15,8 +15,8 @@ func newTestChatModel() *openaiChatLanguageModel {
 	return &openaiChatLanguageModel{
 		modelID: "gpt-4o",
 		provider: &openaiProvider{
-			apiKey:                "test",
-			fileIDPrefixes:        []string{"file-"},
+			apiKey:                      "test",
+			fileIDPrefixes:              []string{"file-"},
 			passThroughUnsupportedFiles: false,
 		},
 	}

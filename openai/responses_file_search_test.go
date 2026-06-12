@@ -157,7 +157,7 @@ func TestResponsesShellCallIncludesItemIDMetadata(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected openai metadata, got: %v", toolCall.ProviderMetadata)
 	}
-	if v, _ := om["itemId"]; v != "sh-1" {
+	if v := om["itemId"]; v != "sh-1" {
 		t.Errorf("itemId = %v, want sh-1", om["itemId"])
 	}
 }

@@ -32,41 +32,41 @@ type Logger = openaicompatible.Logger
 
 // ProviderSettings configures an OpenAI provider.
 type ProviderSettings struct {
-	BaseURL                  string
-	Name                     string
-	APIKey                   string
-	Organization             string
-	Project                  string
-	Headers                  http.Header
-	Fetch                    Fetcher
-	GenerateID               IDGenerator
-	Logger                   Logger
-	Retry                    *RetryOptions
-	MaxResponseBodyBytes     int64
-	MaxErrorResponseBytes    int64
-	FileIDPrefixes           []string
+	BaseURL                     string
+	Name                        string
+	APIKey                      string
+	Organization                string
+	Project                     string
+	Headers                     http.Header
+	Fetch                       Fetcher
+	GenerateID                  IDGenerator
+	Logger                      Logger
+	Retry                       *RetryOptions
+	MaxResponseBodyBytes        int64
+	MaxErrorResponseBytes       int64
+	FileIDPrefixes              []string
 	PassThroughUnsupportedFiles bool
 }
 
 type openaiProvider struct {
-	compat              openaicompatible.Provider
-	apiKey              string
-	organization        string
-	project             string
-	baseURL             string
-	fetch               Fetcher
-	generateID          IDGenerator
-	logger              Logger
-	retry               RetryOptions
-	maxResponseBodyBytes int64
-	maxErrorResponseBytes int64
-	err                 error
-	files               Files
-	skills              Skills
-	realtime            ExperimentalRealtimeFactory
-	tools               openaiTools
-	headers             http.Header
-	fileIDPrefixes      []string
+	compat                      openaicompatible.Provider
+	apiKey                      string
+	organization                string
+	project                     string
+	baseURL                     string
+	fetch                       Fetcher
+	generateID                  IDGenerator
+	logger                      Logger
+	retry                       RetryOptions
+	maxResponseBodyBytes        int64
+	maxErrorResponseBytes       int64
+	err                         error
+	files                       Files
+	skills                      Skills
+	realtime                    ExperimentalRealtimeFactory
+	tools                       openaiTools
+	headers                     http.Header
+	fileIDPrefixes              []string
 	passThroughUnsupportedFiles bool
 }
 
@@ -118,18 +118,18 @@ func CreateOpenAI(settings ProviderSettings) Provider {
 	compat := openaicompatible.CreateOpenAICompatible(compatSettings)
 
 	p := &openaiProvider{
-		compat:               compat,
-		apiKey:               apiKey,
-		organization:         settings.Organization,
-		project:              settings.Project,
-		baseURL:              baseURL,
-		fetch:                settings.Fetch,
-		generateID:           settings.GenerateID,
-		logger:               settings.Logger,
-		retry:                defaultOpenAIRetry(settings.Retry),
-		maxResponseBodyBytes: openaiDefaultIfZero(settings.MaxResponseBodyBytes, 32<<20),
+		compat:                compat,
+		apiKey:                apiKey,
+		organization:          settings.Organization,
+		project:               settings.Project,
+		baseURL:               baseURL,
+		fetch:                 settings.Fetch,
+		generateID:            settings.GenerateID,
+		logger:                settings.Logger,
+		retry:                 defaultOpenAIRetry(settings.Retry),
+		maxResponseBodyBytes:  openaiDefaultIfZero(settings.MaxResponseBodyBytes, 32<<20),
 		maxErrorResponseBytes: openaiDefaultIfZero(settings.MaxErrorResponseBytes, 1<<20),
-		headers:              headers,
+		headers:               headers,
 	}
 	if p.logger == nil {
 		p.logger = openaiNoopLogger{}

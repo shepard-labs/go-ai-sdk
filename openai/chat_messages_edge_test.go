@@ -201,8 +201,8 @@ func TestConvertUserFileContentPDFURL(t *testing.T) {
 func TestConvertUserFileContentPDFData(t *testing.T) {
 	m := newTestChatModel()
 	out, err := m.convertUserFileContent(FileContent{
-		Data:     []byte("%PDF-1.4"),
-		Filename: "doc.pdf",
+		Data:      []byte("%PDF-1.4"),
+		Filename:  "doc.pdf",
 		MediaType: "application/pdf",
 	})
 	if err != nil {
