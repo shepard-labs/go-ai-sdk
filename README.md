@@ -1,11 +1,17 @@
 # go-ai-sdk
 
-Go provider SDK with provider-specific subpackages. The Anthropic package includes text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results. The OpenRouter package includes chat, completion, embeddings, image generation, video generation, provider routing, BYOK headers, and OpenRouter usage metadata. The Cohere package includes chat generation, chat streaming, embeddings, reranking, citations, thinking, and Cohere RAG documents.
+Go provider SDK with a provider-agnostic router. The root `ai` package picks a (provider, model) pair per call by asking Claude Haiku via structured output, then dispatches the call to that provider — so callers write `ai.RouterOptions` once and the router handles Anthropic, OpenAI, or any other configured provider. Provider-specific subpackages remain available for callers who want raw access: the Anthropic package includes text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results. The OpenRouter package includes chat, completion, embeddings, image generation, video generation, provider routing, BYOK headers, and OpenRouter usage metadata. The Cohere package includes chat generation, chat streaming, embeddings, reranking, citations, thinking, and Cohere RAG documents.
 
 Module path:
 
 ```bash
 github.com/shepard-labs/go-ai-sdk
+```
+
+Router (root) package path:
+
+```go
+github.com/shepard-labs/go-ai-sdk      // package ai
 ```
 
 Provider package paths:
@@ -17,8 +23,75 @@ github.com/shepard-labs/go-ai-sdk/openaicompatible
 github.com/shepard-labs/go-ai-sdk/openrouter
 ```
 
+## Router
+
+The `ai` package is the recommended entry point. Pass in pre-constructed providers and a catalog of allowed models; the router asks Claude Haiku to pick the best (provider, model) pair for the prompt, then dispatches the call to that provider. The caller writes provider-agnostic options and gets back the chosen provider's `GenerateResult` plus a `Selection` that records which model was used.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    ai "github.com/shepard-labs/go-ai-sdk"
+    "github.com/shepard-labs/go-ai-sdk/anthropic"
+    "github.com/shepard-labs/go-ai-sdk/openai"
+)
+
+func main() {
+    r := ai.CreateRouter(ai.RouterSettings{
+        Anthropic: anthropic.CreateAnthropic(anthropic.ProviderSettings{}),
+        OpenAI:    openai.CreateOpenAI(openai.ProviderSettings{}),
+        Catalog: ai.ProviderCatalog{
+            "anthropic": {"claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-8"},
+            "openai":    {"gpt-5", "gpt-5-mini", "gpt-4.1"},
+        },
+    })
+    if err := r.Err(); err != nil {
+        log.Fatal(err)
+    }
+
+    res, sel, err := r.Generate(context.Background(), ai.RouterOptions{
+        Prompt: "Write a haiku about programming in Go.",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Printf("routed to: %s / %s — %s\n", sel.Provider, sel.Model, sel.Reason)
+    switch res.Kind {
+    case ai.ResultKindAnthropic:
+        for _, c := range res.Anthropic.Value.Content {
+            if t, ok := c.(anthropic.TextContent); ok {
+                fmt.Println(t.Text)
+            }
+        }
+    case ai.ResultKindOpenAI:
+        for _, c := range res.OpenAI.Value.Content {
+            if t, ok := c.(openai.TextContent); ok {
+                fmt.Println(t.Text)
+            }
+        }
+    }
+}
+```
+
+The catalog is the single source of truth for which models the router may choose. The router's system prompt is built from it, and the routing response is validated against it — so a hallucinated model name from Haiku cannot escape the catalog. Providers you don't want the router to consider can be omitted from `RouterSettings` (or simply absent from the catalog). Streaming is symmetric: `Router.Stream(ctx, opts)` returns a `*StreamEnvelope` with the provider's typed `StreamResult`. Set `RouterOptions.ForceProvider` / `ForceModel` to bypass the Haiku routing call for tests or "always use this model" debug flags.
+
+See [`examples/router/`](./examples/router) for runnable scenarios:
+
+- [`examples/router/basic`](./examples/router/basic) — text generation via the router
+- [`examples/router/stream`](./examples/router/stream) — streaming via the router
+
+For raw, provider-specific use, see the [Anthropic](#anthropic), [OpenAI-Compatible](#openai-compatible-providers), [OpenRouter](#openrouter), and [Cohere](#cohere) sections below.
+
 ## Features
 
+- Provider-agnostic router that picks a (provider, model) pair per call via Claude Haiku and structured output
+- Pre-constructed providers and a `ProviderCatalog` of allowed models
+- Streaming and non-streaming dispatch; per-call `ForceProvider` / `ForceModel` to skip routing
 - Provider creation with API key or bearer token auth
 - Environment fallback from `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`
 - Default provider via `anthropic.Anthropic`
