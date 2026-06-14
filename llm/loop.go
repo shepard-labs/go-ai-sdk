@@ -232,20 +232,6 @@ func toolUseContents(contents []Content) []ToolUseContent {
 	return toolCalls
 }
 
-func dispatchToolCalls(ctx context.Context, dispatcher ToolDispatcher, toolCalls []ToolUseContent) []Content {
-	results := make([]Content, len(toolCalls))
-	var wg sync.WaitGroup
-	for i, toolCall := range toolCalls {
-		wg.Add(1)
-		go func(i int, toolCall ToolUseContent) {
-			defer wg.Done()
-			results[i] = dispatchToolCall(ctx, dispatcher, toolCall)
-		}(i, toolCall)
-	}
-	wg.Wait()
-	return results
-}
-
 func dispatchToolCall(ctx context.Context, dispatcher ToolDispatcher, toolCall ToolUseContent) (result Content) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
