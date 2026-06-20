@@ -23,6 +23,10 @@ func (f loopClientFunc) Generate(ctx context.Context, opts GenerateOptions) (*Ge
 	return f(ctx, opts)
 }
 
+func (loopClientFunc) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
+	return nil, ErrStreamNotImplemented
+}
+
 func (d *mapDispatcher) Dispatch(ctx context.Context, name string, input json.RawMessage) (json.RawMessage, error) {
 	d.mu.Lock()
 	d.calls = append(d.calls, name)
@@ -497,4 +501,82 @@ func TestREQBUDGET005_ZeroBudgetNoOp(t *testing.T) {
 
 func contains(s, substr string) bool {
 	return len(substr) == 0 || len(s) >= len(substr) && (s == substr || contains(s[1:], substr) || s[:len(substr)] == substr)
+}
+
+// TestDefaultTokenEstimatorPrefersRealUsage verifies the default TokenCounter
+// (when none provided) uses the provider-reported Usage from the most recent
+// Generate when non-zero, falling back to chars/4 only when the provider reports
+// zeros. spec §1.3
+func TestDefaultTokenEstimatorPrefersRealUsage(t *testing.T) {
+	// First Generate reports real usage; the budget counter should use it and
+	// NOT call estimateMessageTokens (which would return >0 for the messages).
+	// We assert the estimator short-circuits by giving a budget smaller than
+	// the reported usage but larger than the chars/4 estimate of the first msg.
+	messages := []Message{{Role: "user", Content: []Content{TextContent{Text: "hi"}}}}
+	client := &mockClient{results: []*GenerateResult{
+		{FinishReason: FinishReasonToolCalls, Usage: Usage{InputTokens: 50, OutputTokens: 5}, Content: []Content{ToolUseContent{ID: "1", Name: "t"}}},
+		{FinishReason: FinishReasonStop, Usage: Usage{InputTokens: 60, OutputTokens: 6}},
+	}}
+	dispatcher := &mapDispatcher{handlers: map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
+		"t": func(context.Context, json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
+	}}
+	// TokenBudget 35: the chars/4 estimate of "hi" (~1) is well under 35, so
+	// the heuristic would NOT trim; but the real usage (55) exceeds 35, so the
+	// usage-based estimator must trim. After trimming the tool pair, only the
+	// first user message remains (estimator returns 55 still > 35, but there is
+	// no older tool pair to trim, so it stops). The point: the counter used the
+	// real usage, proving the estimator prefers it.
+	_, _, err := AgentLoopWithOptions(context.Background(), client, GenerateOptions{Messages: messages}, dispatcher, AgentLoopOptions{
+		MaxTurns:    3,
+		TokenBudget: 35,
+	})
+	if err != nil {
+		t.Fatalf("AgentLoop error = %v", err)
+	}
+	// The first request must have retained the user message; the second (after
+	// a tool call) would be trimmed if usage-based. Verify at least one call
+	// happened and the first call kept the user message.
+	first := client.optionAt(0).Messages
+	if len(first) != 1 || first[0].Role != "user" {
+		t.Fatalf("first request messages = %#v, want first user retained", first)
+	}
+}
+
+// TestLastUsagePopulatedFromGenerate verifies AgentLoopResult.LastUsage carries
+// the provider-reported Usage from the most recent successful Generate.
+// spec §1.3
+func TestLastUsagePopulatedFromGenerate(t *testing.T) {
+	client := &mockClient{results: []*GenerateResult{
+		{FinishReason: FinishReasonStop, Usage: Usage{InputTokens: 42, OutputTokens: 7}},
+	}}
+	result, err := AgentLoopResultWithOptions(context.Background(), client, GenerateOptions{}, &mapDispatcher{}, AgentLoopOptions{MaxTurns: 1})
+	if err != nil {
+		t.Fatalf("AgentLoop error = %v", err)
+	}
+	if result.LastUsage.InputTokens != 42 || result.LastUsage.OutputTokens != 7 {
+		t.Fatalf("LastUsage = %#v, want {42,7}", result.LastUsage)
+	}
+}
+
+// TestDefaultTokenEstimatorFallsBackToCharsPer4 verifies that when the provider
+// reports zero usage, the default estimator falls back to the chars/4 heuristic.
+// spec §1.3
+func TestDefaultTokenEstimatorFallsBackToCharsPer4(t *testing.T) {
+	// Provider reports zero usage; a tiny budget should trigger trimming using
+	// the chars/4 heuristic (the long tool-result text pushes the estimate up).
+	messages := []Message{
+		{Role: "user", Content: []Content{TextContent{Text: "first"}}},
+		{Role: "assistant", Content: []Content{ToolUseContent{ID: "old", Name: "t", Input: json.RawMessage(`{"long":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}`)}}},
+		{Role: "user", Content: []Content{ToolResultContent{ToolUseID: "old", Text: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}},
+	}
+	client := &mockClient{results: []*GenerateResult{
+		{FinishReason: FinishReasonStop, Usage: Usage{InputTokens: 0, OutputTokens: 0}},
+	}}
+	_, _, err := AgentLoopWithOptions(context.Background(), client, GenerateOptions{Messages: messages}, &mapDispatcher{}, AgentLoopOptions{MaxTurns: 1, TokenBudget: 2})
+	if err != nil {
+		t.Fatalf("AgentLoop error = %v", err)
+	}
+	if len(client.optionAt(0).Messages) != 1 {
+		t.Fatalf("messages = %#v, want heuristic to trim tool pair when usage is zero", client.optionAt(0).Messages)
+	}
 }

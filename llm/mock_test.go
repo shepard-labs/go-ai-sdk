@@ -30,6 +30,10 @@ func (m *mockClient) Generate(ctx context.Context, opts GenerateOptions) (*Gener
 	return result, err
 }
 
+func (m *mockClient) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
+	return nil, ErrStreamNotImplemented
+}
+
 func (m *mockClient) callCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

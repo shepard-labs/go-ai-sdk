@@ -7,27 +7,43 @@ import (
 	"testing"
 )
 
-func TestREQLLM001_ClientOnlyGenerate(t *testing.T) {
+func TestREQLLM001_ClientHasGenerateAndStream(t *testing.T) {
 	clientType := reflect.TypeOf((*Client)(nil)).Elem()
-	if clientType.NumMethod() != 1 {
-		t.Fatalf("Client has %d methods, want 1", clientType.NumMethod())
+	// spec §1.1: Client gains a Stream method alongside Generate.
+	if clientType.NumMethod() != 2 {
+		t.Fatalf("Client has %d methods, want 2", clientType.NumMethod())
 	}
-	method, ok := clientType.MethodByName("Generate")
+	gen, ok := clientType.MethodByName("Generate")
 	if !ok {
 		t.Fatal("Client missing Generate method")
 	}
-	want := reflect.TypeOf(func(context.Context, GenerateOptions) (*GenerateResult, error) { return nil, nil })
-	if method.Type.NumIn() != want.NumIn() || method.Type.NumOut() != want.NumOut() {
-		t.Fatalf("Generate signature = %s, want Client.Generate(context.Context, GenerateOptions) (*GenerateResult, error)", method.Type)
+	wantGen := reflect.TypeOf(func(context.Context, GenerateOptions) (*GenerateResult, error) { return nil, nil })
+	if gen.Type.NumIn() != wantGen.NumIn() || gen.Type.NumOut() != wantGen.NumOut() {
+		t.Fatalf("Generate signature = %s, want Client.Generate(context.Context, GenerateOptions) (*GenerateResult, error)", gen.Type)
 	}
-	for i := 0; i < want.NumIn(); i++ {
-		if method.Type.In(i) != want.In(i) {
-			t.Fatalf("Generate input %d = %s, want %s", i, method.Type.In(i), want.In(i))
+	for i := 0; i < wantGen.NumIn(); i++ {
+		if gen.Type.In(i) != wantGen.In(i) {
+			t.Fatalf("Generate input %d = %s, want %s", i, gen.Type.In(i), wantGen.In(i))
 		}
 	}
-	for i := 0; i < want.NumOut(); i++ {
-		if method.Type.Out(i) != want.Out(i) {
-			t.Fatalf("Generate output %d = %s, want %s", i, method.Type.Out(i), want.Out(i))
+	for i := 0; i < wantGen.NumOut(); i++ {
+		if gen.Type.Out(i) != wantGen.Out(i) {
+			t.Fatalf("Generate output %d = %s, want %s", i, gen.Type.Out(i), wantGen.Out(i))
+		}
+	}
+	stream, ok := clientType.MethodByName("Stream")
+	if !ok {
+		t.Fatal("Client missing Stream method")
+	}
+	wantStream := reflect.TypeOf(func(context.Context, GenerateOptions) (<-chan StreamPart, error) { return nil, nil })
+	for i := 0; i < wantStream.NumIn(); i++ {
+		if stream.Type.In(i) != wantStream.In(i) {
+			t.Fatalf("Stream input %d = %s, want %s", i, stream.Type.In(i), wantStream.In(i))
+		}
+	}
+	for i := 0; i < wantStream.NumOut(); i++ {
+		if stream.Type.Out(i) != wantStream.Out(i) {
+			t.Fatalf("Stream output %d = %s, want %s", i, stream.Type.Out(i), wantStream.Out(i))
 		}
 	}
 }
@@ -55,6 +71,30 @@ func TestREQLLM003_PublicTypesNoGoAISDKReexport(t *testing.T) {
 	}
 	if len(contents) != 3 {
 		t.Fatalf("content implementations = %d, want 3", len(contents))
+	}
+}
+
+// TestNewContentVariantsSatisfyContent verifies the new ReasoningContent and
+// ImageContent types added in spec §1.2 satisfy the Content interface and live
+// in the llm package.
+func TestNewContentVariantsSatisfyContent(t *testing.T) {
+	for _, typ := range []reflect.Type{
+		reflect.TypeOf(ReasoningContent{}),
+		reflect.TypeOf(ImageContent{}),
+		reflect.TypeOf(ImageURLSource{}),
+		reflect.TypeOf(ImageInlineSource{}),
+	} {
+		if typ.PkgPath() != "github.com/shepard-labs/go-ai-sdk/llm" {
+			t.Fatalf("%s package = %q", typ.Name(), typ.PkgPath())
+		}
+	}
+	var contents []Content = []Content{
+		ReasoningContent{Text: "thinking"},
+		ImageContent{Source: ImageURLSource{URL: "https://example.com/a.png"}, MIME: "image/png"},
+		ImageContent{Source: ImageInlineSource{Data: []byte{0x89}}, MIME: "image/png"},
+	}
+	if len(contents) != 3 {
+		t.Fatalf("new content implementations = %d, want 3", len(contents))
 	}
 }
 

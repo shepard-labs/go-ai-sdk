@@ -38,6 +38,10 @@ type AgentLoopResult struct {
 	Input     json.RawMessage
 	Turns     int
 	Repairs   int
+	// LastUsage carries the provider-reported Usage from the most recent
+	// successful Generate call, if any. Zero-valued when the provider reports
+	// no usage. spec §1.3
+	LastUsage Usage
 }
 
 // AgentLoopOptions configures multi-turn tool use and terminal submission behavior.
@@ -68,23 +72,38 @@ func AgentLoopResultWithOptions(ctx context.Context, client Client, opts Generat
 	repairs := 0
 	policies := normalizeToolPolicies(loopOpts)
 	terminalTools := terminalToolNames(policies)
+	// lastUsage tracks the provider-reported usage from the most recent
+	// successful Generate. The default token estimator prefers it over the
+	// chars/4 heuristic when the provider reports non-zero input tokens.
+	// spec §1.3
+	var lastUsage Usage
+	counter := loopOpts.TokenCounter
+	if counter == nil {
+		counter = func(msgs []Message) int {
+			if lastUsage.InputTokens > 0 {
+				return lastUsage.InputTokens + lastUsage.OutputTokens
+			}
+			return estimateMessageTokens(msgs)
+		}
+	}
 	for {
 		if loopOpts.MaxTurns > 0 && turns >= loopOpts.MaxTurns {
-			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs}, ErrMaxTurnsExceeded
+			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, ErrMaxTurnsExceeded
 		}
 		if err := ctx.Err(); err != nil {
-			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs}, err
+			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, err
 		}
-		messages = enforceTokenBudget(messages, loopOpts.TokenBudget, loopOpts.TokenCounter)
+		messages = enforceTokenBudget(messages, loopOpts.TokenBudget, counter)
 		request := opts
 		request.Messages = cloneMessages(messages)
 		result, err := client.Generate(ctx, request)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs}, ctxErr
+				return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, ctxErr
 			}
-			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs}, err
+			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, err
 		}
+		lastUsage = result.Usage
 		turns++
 		assistant := Message{Role: "assistant", Content: cloneContent(result.Content)}
 		messages = append(messages, assistant)
@@ -93,11 +112,11 @@ func AgentLoopResultWithOptions(ctx context.Context, client Client, opts Generat
 		if len(toolCalls) > 0 && (result.FinishReason == FinishReasonToolCalls || hasTerminalToolCall(toolCalls, policies)) {
 			processed, err := processToolCalls(ctx, dispatcher, toolCalls, policies, loopOpts, &repairs)
 			if err != nil {
-				return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs}, err
+				return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, err
 			}
 			if processed.terminal != nil {
 				terminal := *processed.terminal
-				return AgentLoopResult{Messages: messages, ToolName: terminal.Name, ToolUseID: terminal.ID, Input: cloneRawMessage(terminal.Input), Turns: turns, Repairs: repairs}, nil
+				return AgentLoopResult{Messages: messages, ToolName: terminal.Name, ToolUseID: terminal.ID, Input: cloneRawMessage(terminal.Input), Turns: turns, Repairs: repairs, LastUsage: lastUsage}, nil
 			}
 			if len(processed.results) > 0 {
 				messages = append(messages, Message{Role: "user", Content: processed.results})
@@ -110,15 +129,15 @@ func AgentLoopResultWithOptions(ctx context.Context, client Client, opts Generat
 			continue
 		case FinishReasonStop:
 			if len(terminalTools) > 0 {
-				return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs}, fmt.Errorf("%w: %s", ErrNoSubmitResult, strings.Join(terminalTools, ", "))
+				return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, fmt.Errorf("%w: %s", ErrNoSubmitResult, strings.Join(terminalTools, ", "))
 			}
-			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs}, nil
+			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, nil
 		case FinishReasonLength:
-			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs}, fmt.Errorf("llm: finish reason %s", FinishReasonLength)
+			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, fmt.Errorf("llm: finish reason %s", FinishReasonLength)
 		case FinishReasonError:
-			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs}, fmt.Errorf("llm: finish reason %s", FinishReasonError)
+			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, fmt.Errorf("llm: finish reason %s", FinishReasonError)
 		default:
-			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs}, fmt.Errorf("llm: finish reason %s", result.FinishReason)
+			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, fmt.Errorf("llm: finish reason %s", result.FinishReason)
 		}
 	}
 }

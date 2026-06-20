@@ -1,4 +1,4 @@
-package llm
+package adapters
 
 import (
 	"context"
@@ -11,11 +11,12 @@ import (
 	"testing"
 
 	"github.com/shepard-labs/go-ai-sdk/anthropic"
+	. "github.com/shepard-labs/go-ai-sdk/llm"
 )
 
 func TestREQADAPTER001_GoAISDKImportOnlyInAdapter(t *testing.T) {
 	var offenders []string
-	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
+	err := filepath.WalkDir("..", func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -29,7 +30,7 @@ func TestREQADAPTER001_GoAISDKImportOnlyInAdapter(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(data), "github.com/shepard-labs/go-ai-sdk/anthropic") && filepath.Base(path) != "adapter.go" {
+		if strings.Contains(string(data), "github.com/shepard-labs/go-ai-sdk/anthropic") && !strings.HasPrefix(path, filepath.Join("..", "adapters")) {
 			offenders = append(offenders, path)
 		}
 		return nil
@@ -38,7 +39,7 @@ func TestREQADAPTER001_GoAISDKImportOnlyInAdapter(t *testing.T) {
 		t.Fatalf("walk llm: %v", err)
 	}
 	if len(offenders) > 0 {
-		t.Fatalf("anthropic imports outside adapter.go: %v", offenders)
+		t.Fatalf("anthropic imports outside llm/adapters: %v", offenders)
 	}
 }
 
