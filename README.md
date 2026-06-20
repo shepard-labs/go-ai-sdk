@@ -1,17 +1,16 @@
 # go-ai-sdk
 
-Go provider SDK with first-class packages per vendor. Use the `llm` package for a provider-neutral `Client`, multi-turn tool agent loops, failover, and caching—or import a provider package directly for full API access. The Anthropic package includes text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results. The OpenRouter package includes chat, completion, embeddings, image generation, video generation, provider routing, BYOK headers, and OpenRouter usage metadata. The Cohere package includes chat generation, chat streaming, embeddings, reranking, citations, thinking, and Cohere RAG documents.
+Go provider SDK with first-class packages per vendor. Use the `llm` package tree for a provider-neutral `Client`, streaming, multi-turn tool agent loops, failover, caching, typed schemas, durable stores, and local toolkits—or import a provider package directly for full API access. The Anthropic package includes text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results. The OpenRouter package includes chat, completion, embeddings, image generation, video generation, provider routing, BYOK headers, and OpenRouter usage metadata. The Cohere package includes chat generation, chat streaming, embeddings, reranking, citations, thinking, and Cohere RAG documents.
 
-Module path:
+Root module path:
 
 ```bash
 github.com/shepard-labs/go-ai-sdk
 ```
 
-Package paths:
+Provider modules:
 
 ```go
-github.com/shepard-labs/go-ai-sdk/llm          // agent Client, tool loops, adapters
 github.com/shepard-labs/go-ai-sdk/anthropic
 github.com/shepard-labs/go-ai-sdk/cohere
 github.com/shepard-labs/go-ai-sdk/google
@@ -20,11 +19,33 @@ github.com/shepard-labs/go-ai-sdk/openaicompatible
 github.com/shepard-labs/go-ai-sdk/openrouter
 ```
 
+Provider-neutral `llm` packages:
+
+```go
+github.com/shepard-labs/go-ai-sdk/llm                    // Client, messages, tools, agent loops, failover, cache
+github.com/shepard-labs/go-ai-sdk/llm/adapters           // direct adapter constructors
+github.com/shepard-labs/go-ai-sdk/llm/adapters/anthropic // registry blank import for "anthropic:<model>"
+github.com/shepard-labs/go-ai-sdk/llm/adapters/cohere
+github.com/shepard-labs/go-ai-sdk/llm/adapters/google
+github.com/shepard-labs/go-ai-sdk/llm/adapters/openai
+github.com/shepard-labs/go-ai-sdk/llm/adapters/openaicompatible
+github.com/shepard-labs/go-ai-sdk/llm/adapters/openrouter
+github.com/shepard-labs/go-ai-sdk/llm/registry           // provider-name registry and NewClient
+github.com/shepard-labs/go-ai-sdk/llm/schema             // Go structs to JSON-schema tools
+github.com/shepard-labs/go-ai-sdk/llm/store              // run persistence interfaces and codecs
+github.com/shepard-labs/go-ai-sdk/llm/store/file
+github.com/shepard-labs/go-ai-sdk/llm/store/gcs
+github.com/shepard-labs/go-ai-sdk/llm/store/memory
+github.com/shepard-labs/go-ai-sdk/llm/store/postgres
+github.com/shepard-labs/go-ai-sdk/llm/store/r2
+github.com/shepard-labs/go-ai-sdk/llm/toolkit            // file and shell tools for agent loops
+```
+
 ## llm
 
-The `llm` package sits above provider subpackages. It defines a small `Client` interface (`Generate`), normalized messages and tools, optional `WithFailover` and `WithCache` decorators, and `AgentLoopWithOptions` for multi-turn tool use with terminal tools and validation policies. Implement `ToolDispatcher` to run tools (any registry that exposes `Dispatch(ctx, name, input)` works).
+The `llm` package sits above provider subpackages. It defines a small `Client` interface (`Generate` and `Stream`), normalized messages and tools, optional `WithFailover` and `WithCache` decorators, and `AgentLoopWithOptions` for multi-turn tool use with terminal tools, validation policies, token budgets, and usage tracking. Implement `ToolDispatcher` to run tools (any registry that exposes `Dispatch(ctx, name, input)` works).
 
-Anthropic is wired via `NewAnthropicClient` or `NewAnthropicAdapter` on an existing `anthropic.LanguageModel`.
+Provider adapters can be used directly from `llm/adapters`, or registered by blank-importing one of the adapter registration packages and calling `registry.NewClient`.
 
 ```go
 package main
@@ -33,11 +54,15 @@ import (
     "context"
     "log"
 
+    _ "github.com/shepard-labs/go-ai-sdk/llm/adapters/anthropic"
     "github.com/shepard-labs/go-ai-sdk/llm"
+    "github.com/shepard-labs/go-ai-sdk/llm/registry"
 )
 
 func main() {
-    client, err := llm.NewAnthropicClient("sk-ant-...", llm.AnthropicModelClaudeSonnet46)
+    client, err := registry.NewClient("anthropic:claude-sonnet-4-6", registry.ProviderOptions{
+        APIKey: "sk-ant-...",
+    })
     if err != nil {
         log.Fatal(err)
     }
@@ -63,6 +88,13 @@ func main() {
 ## Features
 
 - Provider-neutral `llm.Client`, agent tool loops, failover and response caching
+- Provider-neutral streaming via `Client.Stream` and typed `StreamPart` events
+- Runtime provider selection with `llm/registry` and blank-imported adapters
+- Direct adapter constructors in `llm/adapters`
+- Struct-derived JSON schemas with `llm/schema`
+- Durable run storage with `llm/store` backends for memory, files, Postgres, GCS, and R2
+- Local file and shell tools for agent loops with `llm/toolkit`
+- Multimodal neutral message parts for text, reasoning, tool calls/results, and images
 
 - Provider creation with API key or bearer token auth
 - Environment fallback from `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`
@@ -92,7 +124,10 @@ func main() {
 
 ```bash
 go get github.com/shepard-labs/go-ai-sdk/llm
+go get github.com/shepard-labs/go-ai-sdk/llm/adapters/anthropic
 ```
+
+Use `llm/registry` plus a blank-imported adapter when you want provider names such as `"anthropic:claude-sonnet-4-6"`, `"openai:gpt-4o"`, or `"openrouter:openai/gpt-4o-mini"`. Use `llm/adapters` directly when you want constructor functions such as `adapters.NewAnthropicClient`.
 
 For provider-only use without the agent layer:
 
@@ -100,7 +135,7 @@ For provider-only use without the agent layer:
 go get github.com/shepard-labs/go-ai-sdk/anthropic
 ```
 
-Add other provider paths as needed (for example `.../openai`, `.../openrouter`, `.../cohere`).
+Add other provider paths as needed (for example `.../openai`, `.../openrouter`, `.../cohere`). Each provider package is also its own module, so it can be consumed independently of the root module.
 
 ## Quick Start
 
@@ -812,24 +847,32 @@ Current suite coverage includes:
 ## Package Layout
 
 ```text
-anthropic/
-├── anthropic.go
-├── model.go
-├── types.go
-├── options.go
-├── errors.go
-├── usage.go
-├── stop-reason.go
-├── cache-control.go
-├── schema-sanitize.go
-├── prompt-convert.go
-├── tools/
-│   ├── prepare.go
-│   └── container-id.go
-└── internal/
-    ├── api-types.go
-    ├── api-schema.go
-    └── streaming.go
+anthropic/             Anthropic native provider module
+cohere/                Cohere native provider module
+google/                Google Gemini native provider module
+openai/                OpenAI native provider module
+openaicompatible/      OpenAI-compatible provider module
+openrouter/            OpenRouter native provider module
+
+llm/                   Provider-neutral Client, messages, tools, agent loop
+├── adapters/          Adapters from native provider models to llm.Client
+│   ├── anthropic/     Blank-import registry registration
+│   ├── cohere/
+│   ├── google/
+│   ├── openai/
+│   ├── openaicompatible/
+│   └── openrouter/
+├── registry/          Provider-name registry and registry.NewClient
+├── schema/            Go struct reflection to JSON-schema tool definitions
+├── store/             Run persistence interfaces and codecs
+│   ├── file/
+│   ├── gcs/
+│   ├── memory/
+│   ├── postgres/
+│   └── r2/
+└── toolkit/           File and shell tools for llm.AgentLoop
+
+examples/              Runnable examples by provider and llm capability
 ```
 
 ## Notes
