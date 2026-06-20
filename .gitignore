@@ -17,8 +17,7 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-# Go workspace file
-go.work
+# Go workspace checksum file
 go.work.sum
 
 # env file
@@ -27,3 +26,5 @@ go.work.sum
 /.idea
 /.codegraph
 docs
+/opensidekick
+go.work
