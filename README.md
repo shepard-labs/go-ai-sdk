@@ -1,5 +1,9 @@
 # go-ai-sdk
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/shepard-labs/go-ai-sdk.svg)](https://pkg.go.dev/github.com/shepard-labs/go-ai-sdk)
+[![Go Report Card](https://goreportcard.com/badge/github.com/shepard-labs/go-ai-sdk)](https://goreportcard.com/report/github.com/shepard-labs/go-ai-sdk)
+[![License](https://img.shields.io/github/license/shepard-labs/go-ai-sdk)](https://github.com/shepard-labs/go-ai-sdk/blob/main/LICENSE)
+
 Go provider SDK with first-class packages per vendor. Use the `llm` package tree for a provider-neutral `Client`, streaming, multi-turn tool agent loops, failover, caching, typed schemas, durable stores, and local toolkits—or import a provider package directly for full API access. The Anthropic package includes text generation, streaming, tools, thinking, structured output, cache control, MCP, context management, citations, and typed provider-tool results. The OpenRouter package includes chat, completion, embeddings, image generation, video generation, provider routing, BYOK headers, and OpenRouter usage metadata. The Cohere package includes chat generation, chat streaming, embeddings, reranking, citations, thinking, and Cohere RAG documents.
 
 Root module path:
