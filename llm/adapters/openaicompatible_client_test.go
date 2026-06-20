@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"testing"
 
-	. "github.com/shepard-labs/go-ai-sdk/llm"
 	"github.com/shepard-labs/go-ai-sdk/openaicompatible"
 )
 

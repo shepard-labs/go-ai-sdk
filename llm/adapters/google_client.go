@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	googlesdk "github.com/shepard-labs/go-ai-sdk/google"
-	. "github.com/shepard-labs/go-ai-sdk/llm"
 )
 
 // GoogleAdapter adapts a Google Gemini language model to the Client interface.

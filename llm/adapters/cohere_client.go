@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	coheresdk "github.com/shepard-labs/go-ai-sdk/cohere"
-	. "github.com/shepard-labs/go-ai-sdk/llm"
 )
 
 // CohereAdapter adapts a Cohere language model to the Client interface.

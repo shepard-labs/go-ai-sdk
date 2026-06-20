@@ -11,7 +11,6 @@ import (
 
 	"github.com/shepard-labs/go-ai-sdk/anthropic"
 	"github.com/shepard-labs/go-ai-sdk/google"
-	. "github.com/shepard-labs/go-ai-sdk/llm"
 	"github.com/shepard-labs/go-ai-sdk/openai"
 	"github.com/shepard-labs/go-ai-sdk/openaicompatible"
 	"github.com/shepard-labs/go-ai-sdk/openrouter"

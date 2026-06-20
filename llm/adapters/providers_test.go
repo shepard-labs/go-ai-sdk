@@ -8,7 +8,6 @@ import (
 
 	"github.com/shepard-labs/go-ai-sdk/cohere"
 	"github.com/shepard-labs/go-ai-sdk/google"
-	. "github.com/shepard-labs/go-ai-sdk/llm"
 	"github.com/shepard-labs/go-ai-sdk/openrouter"
 )
 

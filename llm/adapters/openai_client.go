@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	. "github.com/shepard-labs/go-ai-sdk/llm"
 	openaisdk "github.com/shepard-labs/go-ai-sdk/openai"
 )
 

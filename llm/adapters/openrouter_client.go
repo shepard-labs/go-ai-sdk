@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 
-	. "github.com/shepard-labs/go-ai-sdk/llm"
 	openroutersdk "github.com/shepard-labs/go-ai-sdk/openrouter"
 )
 

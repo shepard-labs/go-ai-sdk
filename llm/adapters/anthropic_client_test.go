@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/shepard-labs/go-ai-sdk/anthropic"
-	. "github.com/shepard-labs/go-ai-sdk/llm"
 )
 
 func TestREQADAPTER001_GoAISDKImportOnlyInAdapter(t *testing.T) {

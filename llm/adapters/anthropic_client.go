@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	anthropicsdk "github.com/shepard-labs/go-ai-sdk/anthropic"
-	. "github.com/shepard-labs/go-ai-sdk/llm"
 )
 
 // AnthropicAdapter adapts go-ai-sdk Anthropic models to the Client interface.

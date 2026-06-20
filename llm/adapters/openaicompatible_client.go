@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 
-	. "github.com/shepard-labs/go-ai-sdk/llm"
 	openaicompatiblesdk "github.com/shepard-labs/go-ai-sdk/openaicompatible"
 )
 
