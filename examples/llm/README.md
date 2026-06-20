@@ -15,6 +15,7 @@ const apiKey = "sk-ant-api03-your-api-key"
 Most examples use `anthropic:claude-sonnet-4-6`; `failover` also uses
 `openai:gpt-4o`. A provider becomes available by blank-importing its adapter
 package, e.g. `_ "github.com/shepard-labs/go-ai-sdk/llm/adapters/anthropic"`.
+Run commands from the repository root.
 
 ## Feature → example map
 
