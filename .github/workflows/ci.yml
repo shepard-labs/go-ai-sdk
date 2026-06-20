@@ -11,8 +11,19 @@ permissions:
 
 jobs:
   test:
-    name: Test
+    name: Test (${{ matrix.module }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - .
+          - anthropic
+          - cohere
+          - google
+          - openai
+          - openaicompatible
+          - openrouter
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -20,24 +31,42 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: ${{ matrix.module }}/go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            */go.sum
 
       - name: Check formatting
+        if: matrix.module == '.'
         run: test -z "$(gofmt -l .)"
 
       - name: Run tests
+        working-directory: ${{ matrix.module }}
         run: go test ./...
 
       - name: Run race tests
+        working-directory: ${{ matrix.module }}
         run: go test -race ./...
 
       - name: Run go vet
+        working-directory: ${{ matrix.module }}
         run: go vet ./...
 
   staticcheck:
-    name: Staticcheck
+    name: Staticcheck (${{ matrix.module }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - .
+          - anthropic
+          - cohere
+          - google
+          - openai
+          - openaicompatible
+          - openrouter
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -45,17 +74,30 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: ${{ matrix.module }}/go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            */go.sum
 
       - name: Run staticcheck
-        uses: dominikh/staticcheck-action@v1
-        with:
-          version: latest
+        working-directory: ${{ matrix.module }}
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
 
   govulncheck:
-    name: Govulncheck
+    name: Govulncheck (${{ matrix.module }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - .
+          - anthropic
+          - cohere
+          - google
+          - openai
+          - openaicompatible
+          - openrouter
     env:
       GOPRIVATE: github.com/shepard-labs/*
     steps:
@@ -65,14 +107,18 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: ${{ matrix.module }}/go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            */go.sum
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
         continue-on-error: true
+        working-directory: ${{ matrix.module }}
         run: govulncheck ./...
 
   release:
@@ -108,8 +154,25 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Create Release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          TAGS=(
+            "$VERSION"
+            "anthropic/$VERSION"
+            "cohere/$VERSION"
+            "google/$VERSION"
+            "openai/$VERSION"
+            "openaicompatible/$VERSION"
+            "openrouter/$VERSION"
+          )
+          for tag in "${TAGS[@]}"; do
+            git tag "$tag" "$GITHUB_SHA"
+          done
+          git push origin "${TAGS[@]}"
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          target_commitish: ${{ github.sha }}
           generate_release_notes: true
