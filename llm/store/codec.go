@@ -11,7 +11,11 @@ import (
 // wireState is the JSON representation of a RunState. llm.Content is an
 // interface, so each content part is tagged with its type to round-trip through
 // JSON without modifying the core llm types.
+//
+// Version field: 0 is the legacy format (no version field present in JSON);
+// 1 is the current format. UnmarshalState treats a missing version as 0.
 type wireState struct {
+	Version  int               `json:"version,omitempty"`
 	ID       string            `json:"id"`
 	Messages []wireMessage     `json:"messages"`
 	Metadata map[string]string `json:"metadata,omitempty"`
@@ -47,7 +51,7 @@ const (
 // MarshalState encodes a RunState to JSON, tagging each content part with its
 // concrete type so it can be reconstructed by UnmarshalState.
 func MarshalState(state *RunState) ([]byte, error) {
-	wire := wireState{ID: state.ID, Metadata: state.Metadata}
+	wire := wireState{Version: 1, ID: state.ID, Metadata: state.Metadata}
 	wire.Messages = make([]wireMessage, len(state.Messages))
 	for i, message := range state.Messages {
 		contents := make([]wireContent, 0, len(message.Content))

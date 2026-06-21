@@ -16,8 +16,8 @@ func (emptyToolDispatcher) Dispatch(context.Context, string, json.RawMessage) (j
 
 func TestREQTOOL002_AgentLoopSurfacesIsError(t *testing.T) {
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "1", Name: "missing"}}},
-		{FinishReason: FinishReasonStop},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "1", Name: "missing"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}},
 	}}
 	messages, _, err := AgentLoop(context.Background(), client, GenerateOptions{}, emptyToolDispatcher{}, "", 3)
 	if err != nil {

@@ -51,7 +51,7 @@ func main() {
 			fmt.Print(p.Text) // answer to stdout, as it arrives
 		case llm.StreamFinish:
 			fmt.Printf("\n\n[finished: %s — %d in / %d out tokens]\n",
-				p.FinishReason, p.Usage.InputTokens, p.Usage.OutputTokens)
+				p.FinishReason.Unified, p.Usage.InputTokens, p.Usage.OutputTokens)
 		case llm.StreamError:
 			log.Fatalf("\nstream error: %v", p.Err)
 		}

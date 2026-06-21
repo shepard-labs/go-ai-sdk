@@ -3,6 +3,8 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 
 	"github.com/shepard-labs/go-ai-sdk/llm"
 )
@@ -23,7 +25,7 @@ func (GeneratorFunc) Stream(ctx context.Context, opts llm.GenerateOptions) (<-ch
 }
 
 // streamNotSupported is embedded by provider adapters that do not implement
-// streaming in the spike. spec §1.1
+// streaming. spec §1.1
 type streamNotSupported struct{}
 
 func (streamNotSupported) Stream(ctx context.Context, opts llm.GenerateOptions) (<-chan llm.StreamPart, error) {
@@ -60,13 +62,17 @@ func toolResultOutputType(isError bool) string {
 func fromUnifiedFinishReason(unified string) llm.FinishReason {
 	switch unified {
 	case "stop":
-		return llm.FinishReasonStop
+		return llm.FinishReason{Unified: llm.FinishReasonStop, Raw: unified}
 	case "tool-calls":
-		return llm.FinishReasonToolCalls
+		return llm.FinishReason{Unified: llm.FinishReasonToolCalls, Raw: unified}
 	case "length":
-		return llm.FinishReasonLength
+		return llm.FinishReason{Unified: llm.FinishReasonLength, Raw: unified}
+	case "content-filter":
+		return llm.FinishReason{Unified: llm.FinishReasonContentFilter, Raw: unified}
+	case "other":
+		return llm.FinishReason{Unified: llm.FinishReasonOther, Raw: unified}
 	default:
-		return llm.FinishReasonError
+		return llm.FinishReason{Unified: llm.FinishReasonError, Raw: unified}
 	}
 }
 
@@ -75,4 +81,46 @@ func derefInt(p *int) int {
 		return 0
 	}
 	return *p
+}
+
+// unsupportedFeature either returns an UnsupportedFeatureError (policy
+// error/default) or appends a Warning to warnings and returns nil (policy warn).
+func unsupportedFeature(policy llm.UnsupportedFeaturePolicy, provider, feature, msg string, warnings *[]llm.Warning) error {
+	if policy == llm.UnsupportedFeaturePolicyWarn {
+		*warnings = append(*warnings, llm.Warning{
+			Code:     "unsupported_feature",
+			Message:  fmt.Sprintf("%s: %s", feature, msg),
+			Provider: provider,
+		})
+		return nil
+	}
+	return &llm.UnsupportedFeatureError{Provider: provider, Feature: feature, Message: msg}
+}
+
+// toHTTPHeader converts a neutral single-valued header map to an http.Header.
+// Returns nil for an empty map.
+func toHTTPHeader(headers map[string]string) http.Header {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(http.Header, len(headers))
+	for k, v := range headers {
+		out.Set(k, v)
+	}
+	return out
+}
+
+// flattenHeader converts an http.Header to a neutral single-valued header map,
+// keeping the first value per key. Returns nil for an empty header.
+func flattenHeader(header http.Header) map[string]string {
+	if len(header) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(header))
+	for k, v := range header {
+		if len(v) > 0 {
+			out[k] = v[0]
+		}
+	}
+	return out
 }

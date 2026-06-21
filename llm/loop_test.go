@@ -58,11 +58,11 @@ func TestREQLOOP001_ConcurrentDispatchPreservesResponseOrder(t *testing.T) {
 		}
 	}
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{
 			ToolUseContent{ID: "1", Name: "first"},
 			ToolUseContent{ID: "2", Name: "second"},
 		}},
-		{FinishReason: FinishReasonStop, Content: []Content{TextContent{Text: "done"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}, Content: []Content{TextContent{Text: "done"}}},
 	}}
 
 	messages, _, err := AgentLoop(context.Background(), client, GenerateOptions{}, dispatcher, "", 3)
@@ -87,8 +87,8 @@ func TestREQLOOP002_ToolErrorBecomesIsErrorResultContinues(t *testing.T) {
 		"fail": func(context.Context, json.RawMessage) (json.RawMessage, error) { return nil, errors.New("boom") },
 	}}
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "1", Name: "fail"}}},
-		{FinishReason: FinishReasonStop, Content: []Content{TextContent{Text: "recovered"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "1", Name: "fail"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}, Content: []Content{TextContent{Text: "recovered"}}},
 	}}
 
 	messages, _, err := AgentLoop(context.Background(), client, GenerateOptions{}, dispatcher, "", 3)
@@ -109,8 +109,8 @@ func TestREQLOOP002_ToolPanicBecomesIsErrorResultContinues(t *testing.T) {
 		"panic": func(context.Context, json.RawMessage) (json.RawMessage, error) { panic("boom") },
 	}}
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "1", Name: "panic"}}},
-		{FinishReason: FinishReasonStop, Content: []Content{TextContent{Text: "recovered"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "1", Name: "panic"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}, Content: []Content{TextContent{Text: "recovered"}}},
 	}}
 
 	messages, _, err := AgentLoop(context.Background(), client, GenerateOptions{}, dispatcher, "", 3)
@@ -128,7 +128,7 @@ func TestREQLOOP003_SubmitResultNotDispatched(t *testing.T) {
 		"regular": func(context.Context, json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
 	}}
 	submit := json.RawMessage(`{"ok":true}`)
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonToolCalls, Content: []Content{
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{
 		ToolUseContent{ID: "1", Name: "regular"},
 		ToolUseContent{ID: "2", Name: "submit_result", Input: submit},
 	}}}}
@@ -147,7 +147,7 @@ func TestREQLOOP003_SubmitResultNotDispatched(t *testing.T) {
 
 func TestREQLOOP003_TerminalPolicyReturnsResultMetadata(t *testing.T) {
 	submit := json.RawMessage(`{"ok":true}`)
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonToolCalls, Content: []Content{
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{
 		ToolUseContent{ID: "terminal-1", Name: "finish", Input: submit},
 	}}}}
 
@@ -170,8 +170,8 @@ func TestREQLOOP003_TerminalPolicyReturnsResultMetadata(t *testing.T) {
 
 func TestREQLOOP003_TerminalValidationFailureRepairs(t *testing.T) {
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "bad", Name: "submit_result", Input: json.RawMessage(`{"summary":"only"}`)}}},
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "good", Name: "submit_result", Input: json.RawMessage(`{"summary":"ok","bullets":["detail"]}`)}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "bad", Name: "submit_result", Input: json.RawMessage(`{"summary":"only"}`)}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "good", Name: "submit_result", Input: json.RawMessage(`{"summary":"ok","bullets":["detail"]}`)}}},
 	}}
 	validator := func(input json.RawMessage) error {
 		if !contains(string(input), "bullets") {
@@ -207,8 +207,8 @@ func TestREQLOOP003_TerminalValidationFailureRepairs(t *testing.T) {
 
 func TestREQLOOP003_TerminalValidationMaxRepairsExceeded(t *testing.T) {
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "1", Name: "finish", Input: json.RawMessage(`{}`)}}},
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "2", Name: "finish", Input: json.RawMessage(`{}`)}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "1", Name: "finish", Input: json.RawMessage(`{}`)}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "2", Name: "finish", Input: json.RawMessage(`{}`)}}},
 	}}
 
 	_, err := AgentLoopResultWithOptions(context.Background(), client, GenerateOptions{}, &mapDispatcher{}, AgentLoopOptions{
@@ -230,9 +230,9 @@ func TestREQLOOP003_NormalToolValidationRepairsBeforeDispatch(t *testing.T) {
 		},
 	}}
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "bad", Name: "search", Input: json.RawMessage(`{"query":""}`)}}},
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "good", Name: "search", Input: json.RawMessage(`{"query":"payments"}`)}}},
-		{FinishReason: FinishReasonStop, Content: []Content{TextContent{Text: "done"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "bad", Name: "search", Input: json.RawMessage(`{"query":""}`)}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "good", Name: "search", Input: json.RawMessage(`{"query":"payments"}`)}}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}, Content: []Content{TextContent{Text: "done"}}},
 	}}
 	validator := func(input json.RawMessage) error {
 		if contains(string(input), `"query":""`) {
@@ -263,7 +263,7 @@ func TestREQLOOP003_ValidTerminalPreventsNormalDispatch(t *testing.T) {
 	dispatcher := &mapDispatcher{handlers: map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
 		"regular": func(context.Context, json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
 	}}
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonToolCalls, Content: []Content{
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{
 		ToolUseContent{ID: "1", Name: "regular"},
 		ToolUseContent{ID: "2", Name: "finish", Input: json.RawMessage(`{"ok":true}`)},
 	}}}}
@@ -286,7 +286,7 @@ func TestREQLOOP003_ValidTerminalPreventsNormalDispatch(t *testing.T) {
 }
 
 func TestREQLOOP003_MultipleTerminalToolsReturnsFirst(t *testing.T) {
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonToolCalls, Content: []Content{
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{
 		ToolUseContent{ID: "1", Name: "finish_a", Input: json.RawMessage(`{"a":true}`)},
 		ToolUseContent{ID: "2", Name: "finish_b", Input: json.RawMessage(`{"b":true}`)},
 	}}}}
@@ -307,7 +307,7 @@ func TestREQLOOP003_MultipleTerminalToolsReturnsFirst(t *testing.T) {
 }
 
 func TestREQLOOP003_StopWithTerminalPolicyReturnsErrNoSubmitResult(t *testing.T) {
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonStop}}}
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonStop}}}}
 	_, err := AgentLoopResultWithOptions(context.Background(), client, GenerateOptions{}, &mapDispatcher{}, AgentLoopOptions{
 		MaxTurns: 1,
 		ToolPolicies: map[string]ToolPolicy{
@@ -321,8 +321,8 @@ func TestREQLOOP003_StopWithTerminalPolicyReturnsErrNoSubmitResult(t *testing.T)
 
 func TestREQLOOP003_InvalidTerminalStillBoundedByMaxTurns(t *testing.T) {
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "1", Name: "finish", Input: json.RawMessage(`{}`)}}},
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "2", Name: "finish", Input: json.RawMessage(`{}`)}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "1", Name: "finish", Input: json.RawMessage(`{}`)}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "2", Name: "finish", Input: json.RawMessage(`{}`)}}},
 	}}
 	_, err := AgentLoopResultWithOptions(context.Background(), client, GenerateOptions{}, &mapDispatcher{}, AgentLoopOptions{
 		MaxTurns: 2,
@@ -337,8 +337,8 @@ func TestREQLOOP003_InvalidTerminalStillBoundedByMaxTurns(t *testing.T) {
 
 func TestREQLOOP004_MaxTurnsZeroDisablesLimit(t *testing.T) {
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{}},
-		{FinishReason: FinishReasonStop, Content: []Content{TextContent{Text: "done"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}, Content: []Content{TextContent{Text: "done"}}},
 	}}
 	_, _, err := AgentLoop(context.Background(), client, GenerateOptions{}, &mapDispatcher{}, "", 0)
 	if err != nil {
@@ -348,7 +348,7 @@ func TestREQLOOP004_MaxTurnsZeroDisablesLimit(t *testing.T) {
 
 func TestREQLOOP005_NoRunStateSideEffects(t *testing.T) {
 	input := []Message{{Role: "user", Content: []Content{TextContent{Text: "hello"}}}}
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonStop}}}
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonStop}}}}
 	_, _, err := AgentLoop(context.Background(), client, GenerateOptions{Messages: input}, &mapDispatcher{}, "", 1)
 	if err != nil {
 		t.Fatalf("AgentLoop error = %v", err)
@@ -361,8 +361,8 @@ func TestREQLOOP005_NoRunStateSideEffects(t *testing.T) {
 func TestREQLOOP006_FinalMessagesFullHistory(t *testing.T) {
 	initial := Message{Role: "user", Content: []Content{TextContent{Text: "start"}}}
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{ToolUseContent{ID: "1", Name: "ok"}}},
-		{FinishReason: FinishReasonStop, Content: []Content{TextContent{Text: "done"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{ToolUseContent{ID: "1", Name: "ok"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}, Content: []Content{TextContent{Text: "done"}}},
 	}}
 	dispatcher := &mapDispatcher{handlers: map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
 		"ok": func(context.Context, json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`ok`), nil },
@@ -377,7 +377,7 @@ func TestREQLOOP006_FinalMessagesFullHistory(t *testing.T) {
 }
 
 func TestREQLOOP_StopWithRequiredSubmitReturnsErrNoSubmitResult(t *testing.T) {
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonStop}}}
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonStop}}}}
 	_, _, err := AgentLoop(context.Background(), client, GenerateOptions{}, &mapDispatcher{}, "submit_final", 1)
 	if !errors.Is(err, ErrNoSubmitResult) || err == nil || !contains(err.Error(), "submit_final") {
 		t.Fatalf("error = %v, want ErrNoSubmitResult mentioning submit_final", err)
@@ -385,7 +385,7 @@ func TestREQLOOP_StopWithRequiredSubmitReturnsErrNoSubmitResult(t *testing.T) {
 }
 
 func TestREQLOOP_MaxTurnsExceeded(t *testing.T) {
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonToolCalls}}}
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonToolCalls}}}}
 	_, _, err := AgentLoop(context.Background(), client, GenerateOptions{}, &mapDispatcher{}, "", 1)
 	if !errors.Is(err, ErrMaxTurnsExceeded) {
 		t.Fatalf("error = %v, want ErrMaxTurnsExceeded", err)
@@ -406,8 +406,8 @@ func TestREQLOOP_ContextCancelMidTurn(t *testing.T) {
 }
 
 func TestREQLOOP_NonSuccessFinishReasonsReturnMessagesAndError(t *testing.T) {
-	for _, reason := range []FinishReason{FinishReasonLength, FinishReasonError, FinishReason("other")} {
-		t.Run(string(reason), func(t *testing.T) {
+	for _, reason := range []FinishReason{{Unified: FinishReasonLength}, {Unified: FinishReasonError}, {Unified: "other"}} {
+		t.Run(string(reason.Unified), func(t *testing.T) {
 			client := &mockClient{results: []*GenerateResult{{FinishReason: reason, Content: []Content{TextContent{Text: "partial"}}}}}
 			messages, _, err := AgentLoop(context.Background(), client, GenerateOptions{}, &mapDispatcher{}, "", 1)
 			if err == nil {
@@ -427,8 +427,8 @@ func TestREQBUDGET001_EnforcesBeforeEveryGenerate(t *testing.T) {
 		return 0
 	}
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Content: []Content{}},
-		{FinishReason: FinishReasonStop},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Content: []Content{}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}},
 	}}
 	_, _, err := AgentLoopWithOptions(context.Background(), client, GenerateOptions{}, &mapDispatcher{}, AgentLoopOptions{MaxTurns: 3, TokenBudget: 1, TokenCounter: counter})
 	if err != nil {
@@ -441,7 +441,7 @@ func TestREQBUDGET001_EnforcesBeforeEveryGenerate(t *testing.T) {
 
 func TestREQBUDGET002_NeverDropsFirstUser(t *testing.T) {
 	first := Message{Role: "user", Content: []Content{TextContent{Text: "must stay"}}}
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonStop}}}
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonStop}}}}
 	_, _, err := AgentLoopWithOptions(context.Background(), client, GenerateOptions{Messages: []Message{first}}, &mapDispatcher{}, AgentLoopOptions{MaxTurns: 1, TokenBudget: 1, TokenCounter: func([]Message) int { return 100 }})
 	if err != nil {
 		t.Fatalf("AgentLoop error = %v", err)
@@ -460,7 +460,7 @@ func TestREQBUDGET003_OldestPairFirstProceedsIfStillOver(t *testing.T) {
 		{Role: "assistant", Content: []Content{ToolUseContent{ID: "new", Name: "tool"}}},
 		{Role: "user", Content: []Content{ToolResultContent{ToolUseID: "new", Text: "new result"}}},
 	}
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonStop}}}
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonStop}}}}
 	_, _, err := AgentLoopWithOptions(context.Background(), client, GenerateOptions{Messages: messages}, &mapDispatcher{}, AgentLoopOptions{MaxTurns: 1, TokenBudget: 1, TokenCounter: func([]Message) int { return 100 }})
 	if err != nil {
 		t.Fatalf("AgentLoop error = %v", err)
@@ -477,7 +477,7 @@ func TestREQBUDGET004_NilCounterUsesCharHeuristic(t *testing.T) {
 		{Role: "assistant", Content: []Content{ToolUseContent{ID: "old", Name: "tool", Input: json.RawMessage(`{"long":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}`)}}},
 		{Role: "user", Content: []Content{ToolResultContent{ToolUseID: "old", Text: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}},
 	}
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonStop}}}
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonStop}}}}
 	_, _, err := AgentLoopWithOptions(context.Background(), client, GenerateOptions{Messages: messages}, &mapDispatcher{}, AgentLoopOptions{MaxTurns: 1, TokenBudget: 2})
 	if err != nil {
 		t.Fatalf("AgentLoop error = %v", err)
@@ -489,7 +489,7 @@ func TestREQBUDGET004_NilCounterUsesCharHeuristic(t *testing.T) {
 
 func TestREQBUDGET005_ZeroBudgetNoOp(t *testing.T) {
 	called := false
-	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReasonStop}}}
+	client := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonStop}}}}
 	_, _, err := AgentLoopWithOptions(context.Background(), client, GenerateOptions{Messages: []Message{{Role: "user"}}}, &mapDispatcher{}, AgentLoopOptions{MaxTurns: 1, TokenCounter: func([]Message) int { called = true; return 100 }})
 	if err != nil {
 		t.Fatalf("AgentLoop error = %v", err)
@@ -514,8 +514,8 @@ func TestDefaultTokenEstimatorPrefersRealUsage(t *testing.T) {
 	// the reported usage but larger than the chars/4 estimate of the first msg.
 	messages := []Message{{Role: "user", Content: []Content{TextContent{Text: "hi"}}}}
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonToolCalls, Usage: Usage{InputTokens: 50, OutputTokens: 5}, Content: []Content{ToolUseContent{ID: "1", Name: "t"}}},
-		{FinishReason: FinishReasonStop, Usage: Usage{InputTokens: 60, OutputTokens: 6}},
+		{FinishReason: FinishReason{Unified: FinishReasonToolCalls}, Usage: Usage{InputTokens: 50, OutputTokens: 5}, Content: []Content{ToolUseContent{ID: "1", Name: "t"}}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}, Usage: Usage{InputTokens: 60, OutputTokens: 6}},
 	}}
 	dispatcher := &mapDispatcher{handlers: map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
 		"t": func(context.Context, json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
@@ -547,7 +547,7 @@ func TestDefaultTokenEstimatorPrefersRealUsage(t *testing.T) {
 // spec §1.3
 func TestLastUsagePopulatedFromGenerate(t *testing.T) {
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonStop, Usage: Usage{InputTokens: 42, OutputTokens: 7}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}, Usage: Usage{InputTokens: 42, OutputTokens: 7}},
 	}}
 	result, err := AgentLoopResultWithOptions(context.Background(), client, GenerateOptions{}, &mapDispatcher{}, AgentLoopOptions{MaxTurns: 1})
 	if err != nil {
@@ -570,7 +570,7 @@ func TestDefaultTokenEstimatorFallsBackToCharsPer4(t *testing.T) {
 		{Role: "user", Content: []Content{ToolResultContent{ToolUseID: "old", Text: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}},
 	}
 	client := &mockClient{results: []*GenerateResult{
-		{FinishReason: FinishReasonStop, Usage: Usage{InputTokens: 0, OutputTokens: 0}},
+		{FinishReason: FinishReason{Unified: FinishReasonStop}, Usage: Usage{InputTokens: 0, OutputTokens: 0}},
 	}}
 	_, _, err := AgentLoopWithOptions(context.Background(), client, GenerateOptions{Messages: messages}, &mapDispatcher{}, AgentLoopOptions{MaxTurns: 1, TokenBudget: 2})
 	if err != nil {

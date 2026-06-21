@@ -17,6 +17,11 @@ Most examples use `anthropic:claude-sonnet-4-6`; `failover` also uses
 package, e.g. `_ "github.com/shepard-labs/go-ai-sdk/llm/adapters/anthropic"`.
 Run commands from the repository root.
 
+The production-neutral example surface targets Anthropic, OpenAI,
+OpenAI-compatible providers, Google, and OpenRouter. Cohere is available in the
+repo, but it is not implemented in the production-neutral compatibility matrix
+yet and should be treated as later work for this layer.
+
 ## Feature → example map
 
 | Example | Demonstrates | Key API |
@@ -31,6 +36,23 @@ Run commands from the repository root.
 | `vision` | Multimodal input — text + image in one message | `llm.ImageContent`, `llm.ImageURLSource` / `ImageInlineSource` |
 | `validation` | Cross-field input validation with model self-correction (repair) | `AgentLoopOptions.ToolPolicies`, `ToolPolicy.Validate`, `MaxToolRepairs` |
 | `budget` | Bounding history sent per turn by trimming oldest tool pairs | `AgentLoopOptions.TokenBudget` / `TokenCounter` |
+
+## Production-neutral provider matrix
+
+| Provider | Registry prefix | Production-neutral status |
+|---|---|---:|
+| Anthropic | `anthropic:` | ✅ implemented |
+| OpenAI | `openai:` | ✅ implemented |
+| OpenAI-compatible | `openaicompatible:` | ✅ implemented |
+| Google | `google:` | ✅ implemented |
+| OpenRouter | `openrouter:` | ✅ implemented |
+| Cohere | `cohere:` | ❌ not implemented |
+
+For explicit unsupported options, the neutral layer returns an
+`UnsupportedFeatureError` by default. Set `UnsupportedFeaturePolicyWarn` when an
+application prefers a warning-backed fallback. Stream examples can be collected
+into a `GenerateResult` with `llm.CollectStream` when you need the same content,
+usage, warning, and metadata shape as non-streaming generation.
 
 ## Running
 
@@ -49,10 +71,12 @@ go run ./examples/llm/budget
 
 ## Not shown here
 
-- **Other providers** (`cohere`, `google`, `openrouter`, `openaicompatible`):
-  the selection mechanism is identical to `registry` — change the
-  `"provider:model-id"` string and blank-import that adapter. For an
+- **Other implemented production-neutral providers** (`google`, `openrouter`,
+  `openaicompatible`): the selection mechanism is identical to `registry` —
+  change the `"provider:model-id"` string and blank-import that adapter. For an
   OpenAI-compatible endpoint (Ollama, LM Studio), also pass
   `registry.ProviderOptions{BaseURL: ...}`.
+- **Cohere**: native Cohere examples and packages exist elsewhere in the repo,
+  but Cohere is not implemented in the production-neutral matrix yet.
 - **Other store backends** (`postgres`, `gcs`, `r2`): drop-in replacements for
   the `file` backend in `store`, but they require external services to run.

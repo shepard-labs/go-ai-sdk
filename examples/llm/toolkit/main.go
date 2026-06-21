@@ -44,7 +44,10 @@ func main() {
 
 	// Files is scoped to Roots: path traversal and symlink escapes are rejected.
 	// Shell only permits the listed base commands, each bounded by a timeout.
-	files := toolkit.Files(toolkit.FilesConfig{Roots: []string{workspace}})
+	files, err := toolkit.Files(toolkit.FilesConfig{Roots: []string{workspace}})
+	if err != nil {
+		log.Fatalf("files toolkit: %v", err)
+	}
 	shell := toolkit.Shell(toolkit.ShellConfig{Cwd: workspace, AllowedCmds: []string{"ls", "wc", "sort"}})
 
 	// Tools flattens the schemas to advertise to the model; Merge builds the

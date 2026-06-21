@@ -45,7 +45,7 @@ func TestREQFAILOVER003_GetNextNilReturnsLastErrorNoPanic(t *testing.T) {
 
 func TestREQFAILOVER004_NoSameClientRetry(t *testing.T) {
 	primaryErr := errors.New("primary")
-	fallbackResult := &GenerateResult{FinishReason: FinishReasonStop}
+	fallbackResult := &GenerateResult{FinishReason: FinishReason{Unified: FinishReasonStop}}
 	primary := &mockClient{errors: []error{primaryErr}}
 	fallback := &mockClient{results: []*GenerateResult{fallbackResult}}
 	client := WithFailover(primary, FailoverConfig{
@@ -68,7 +68,7 @@ func TestREQFAILOVER004_NoSameClientRetry(t *testing.T) {
 
 func TestREQFAILOVER005_ComposableWithCacheAndAdapter(t *testing.T) {
 	primaryErr := errors.New("primary")
-	fallbackResult := &GenerateResult{FinishReason: FinishReasonStop}
+	fallbackResult := &GenerateResult{FinishReason: FinishReason{Unified: FinishReasonStop}}
 	primary := &mockClient{errors: []error{primaryErr}}
 	fallback := &mockClient{results: []*GenerateResult{fallbackResult}}
 	client := WithCache(WithFailover(primary, FailoverConfig{

@@ -47,9 +47,28 @@ func NewOpenAIClientWithSettings(settings OpenAISettings, modelID string) (Clien
 	return NewOpenAIAdapter(provider.Chat(modelID)), nil
 }
 
+// Capabilities reports the feature set supported by the OpenAI adapter.
+func (a *OpenAIAdapter) Capabilities() Capabilities {
+	return Capabilities{
+		Provider:           "openai",
+		Streaming:          true,
+		ToolCalling:        true,
+		ToolChoiceAuto:     true,
+		ToolChoiceNone:     true,
+		ToolChoiceRequired: true,
+		ToolChoiceTool:     true,
+		StructuredOutput:   true,
+		JSONMode:           true,
+		Images:             true,
+		Reasoning:          true,
+		ParallelToolCalls:  true,
+		PromptCaching:      false,
+	}
+}
+
 // Generate sends a completion request through the OpenAI SDK.
 func (a *OpenAIAdapter) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
-	sdkOpts, err := toOpenAICompatibleOptions(opts)
+	sdkOpts, warnings, err := toOpenAICompatibleOptions(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -57,14 +76,18 @@ func (a *OpenAIAdapter) Generate(ctx context.Context, opts GenerateOptions) (*Ge
 	if err != nil {
 		return nil, err
 	}
-	return fromOpenAIResult(result), nil
+	out := fromOpenAIResult(result)
+	if out != nil && len(warnings) > 0 {
+		out.Warnings = append(warnings, out.Warnings...)
+	}
+	return out, nil
 }
 
 // Stream sends a streaming completion request through the OpenAI SDK and maps
 // provider-native StreamPart values into the neutral StreamPart union.
 // spec §1.1
 func (a *OpenAIAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
-	sdkOpts, err := toOpenAICompatibleOptions(opts)
+	sdkOpts, _, err := toOpenAICompatibleOptions(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +111,7 @@ func (a *OpenAIAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-cha
 				if !ok {
 					return
 				}
-				if mapped, emit := mapOpenAIStreamPart(part); emit {
+				for _, mapped := range mapOpenAIStreamPart(part) {
 					out <- mapped
 				}
 			}
@@ -97,40 +120,52 @@ func (a *OpenAIAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-cha
 	return out, nil
 }
 
-// mapOpenAIStreamPart converts an openaisdk.StreamPart to a neutral StreamPart.
-// Returns (zero, false) for parts with no neutral equivalent (StreamStart,
-// StreamResponseMetadata, StreamToolApprovalRequest, StreamCompactionEnd,
-// SourceContent, StreamCustomPart). spec §1.1
-func mapOpenAIStreamPart(part openaisdk.StreamPart) (StreamPart, bool) {
+// mapOpenAIStreamPart converts an openaisdk.StreamPart to zero or more neutral
+// StreamParts. Returns nil for parts with no neutral equivalent
+// (StreamToolApprovalRequest, StreamCompactionEnd, SourceContent,
+// StreamCustomPart). spec §1.1
+func mapOpenAIStreamPart(part openaisdk.StreamPart) []StreamPart {
 	switch p := part.(type) {
+	case openaisdk.StreamStart:
+		return openAICompatibleStartWarnings(p.Warnings)
+	case openaisdk.StreamResponseMetadata:
+		return []StreamPart{openAICompatibleMetadata(p)}
 	case openaisdk.StreamTextStart:
-		return StreamTextStart{}, true
+		return []StreamPart{StreamTextStart{}}
 	case openaisdk.StreamTextDelta:
-		return StreamTextDelta{Text: p.Text}, true
+		return []StreamPart{StreamTextDelta{Text: p.Text}}
 	case openaisdk.StreamTextEnd:
-		return StreamTextEnd{}, true
+		return []StreamPart{StreamTextEnd{}}
 	case openaisdk.StreamReasoningStart:
-		return StreamReasoningStart{}, true
+		return []StreamPart{StreamReasoningStart{}}
 	case openaisdk.StreamReasoningDelta:
-		return StreamReasoningDelta{Text: p.Text}, true
+		return []StreamPart{StreamReasoningDelta{Text: p.Text}}
 	case openaisdk.StreamReasoningEnd:
-		return StreamReasoningEnd{}, true
+		return []StreamPart{StreamReasoningEnd{}}
 	case openaisdk.StreamToolInputStart:
-		return StreamToolCallStart{ID: p.ID, Name: p.ToolName}, true
+		return []StreamPart{StreamToolCallStart{ID: p.ID, Name: p.ToolName}}
 	case openaisdk.StreamToolInputDelta:
-		return StreamToolInputDelta{ID: p.ID, JSON: p.Delta}, true
+		return []StreamPart{StreamToolInputDelta{ID: p.ID, JSON: p.Delta}}
 	case openaisdk.StreamToolInputEnd:
-		return StreamToolInputEnd{ID: p.ID}, true
+		return []StreamPart{StreamToolInputEnd{ID: p.ID}}
 	case openaisdk.StreamToolCall:
-		return StreamToolInputEnd{ID: p.ToolCallID, Input: cloneRawMessage(p.Input)}, true
+		return []StreamPart{StreamToolInputEnd{ID: p.ToolCallID, Input: cloneRawMessage(p.Input)}}
 	case openaisdk.StreamFinish:
-		return StreamFinish{FinishReason: fromUnifiedFinishReason(p.FinishReason.Unified), Usage: Usage{InputTokens: derefInt(p.Usage.InputTokens.Total), OutputTokens: derefInt(p.Usage.OutputTokens.Total)}}, true
+		return []StreamPart{StreamFinish{
+			FinishReason: fromUnifiedFinishReason(p.FinishReason.Unified),
+			Usage: Usage{
+				InputTokens:     derefInt(p.Usage.InputTokens.Total),
+				OutputTokens:    derefInt(p.Usage.OutputTokens.Total),
+				ReasoningTokens: derefInt(p.Usage.OutputTokens.Reasoning),
+			},
+			ProviderMetadata: openAICompatibleProviderMetadata("openai", p.ProviderMetadata),
+		}}
 	case openaisdk.StreamError:
-		return StreamError{Err: p.Err}, true
+		return []StreamPart{StreamError{Err: p.Err}}
 	case openaisdk.StreamRaw:
-		return StreamRaw{Bytes: p.Raw}, true
+		return []StreamPart{StreamRaw{Bytes: p.Raw}}
 	default:
-		return nil, false
+		return nil
 	}
 }
 
@@ -138,11 +173,32 @@ func fromOpenAIResult(result *openaisdk.GenerateResult) *GenerateResult {
 	if result == nil {
 		return nil
 	}
-	return &GenerateResult{
+	out := &GenerateResult{
 		Content:      fromOpenAIContent(result.Content),
 		FinishReason: fromUnifiedFinishReason(result.FinishReason.Unified),
-		Usage:        Usage{InputTokens: derefInt(result.Usage.InputTokens.Total), OutputTokens: derefInt(result.Usage.OutputTokens.Total)},
+		Usage: Usage{
+			InputTokens:     derefInt(result.Usage.InputTokens.Total),
+			OutputTokens:    derefInt(result.Usage.OutputTokens.Total),
+			ReasoningTokens: derefInt(result.Usage.OutputTokens.Reasoning),
+		},
 	}
+	out.Response = ResponseMetadata{
+		ID:      result.Response.ID,
+		ModelID: result.Response.ModelID,
+		Headers: flattenHeader(result.Response.Headers),
+	}
+	if result.Response.Timestamp != nil {
+		out.Response.Timestamp = *result.Response.Timestamp
+	}
+	for _, w := range result.Warnings {
+		out.Warnings = append(out.Warnings, Warning{Code: w.Type, Message: w.Message, Provider: "openai"})
+	}
+	if result.ProviderMetadata != nil {
+		pm := make(ProviderMetadata)
+		pm["openai"] = result.ProviderMetadata
+		out.ProviderMetadata = pm
+	}
+	return out
 }
 
 // fromOpenAIContent converts openai response content. The openai package emits

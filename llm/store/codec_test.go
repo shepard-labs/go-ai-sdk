@@ -41,6 +41,54 @@ func TestMarshalRoundTrip(t *testing.T) {
 	}
 }
 
+// TestMarshalSetsVersion1 asserts MarshalState stamps the current schema
+// version (1) into the JSON, and that a state round-trips through Unmarshal.
+func TestMarshalSetsVersion1(t *testing.T) {
+	state := &RunState{
+		ID:       "run-v",
+		Messages: []llm.Message{{Role: "user", Content: []llm.Content{llm.TextContent{Text: "hi"}}}},
+	}
+	data, err := MarshalState(state)
+	if err != nil {
+		t.Fatalf("MarshalState: %v", err)
+	}
+	var probe struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		t.Fatalf("unmarshal probe: %v", err)
+	}
+	if probe.Version != 1 {
+		t.Fatalf("version = %d, want 1", probe.Version)
+	}
+	got, err := UnmarshalState(data)
+	if err != nil {
+		t.Fatalf("UnmarshalState: %v", err)
+	}
+	if got.ID != "run-v" || len(got.Messages) != 1 {
+		t.Fatalf("round-trip state = %#v", got)
+	}
+}
+
+// TestUnmarshalLegacyVersion0 verifies that JSON with no version field (the
+// legacy version-0 format) decodes successfully, treating a missing version
+// as 0.
+func TestUnmarshalLegacyVersion0(t *testing.T) {
+	// Legacy payload: no "version" key present.
+	payload := []byte(`{"id":"old","messages":[{"role":"user","content":[{"type":"text","text":"legacy"}]}]}`)
+	state, err := UnmarshalState(payload)
+	if err != nil {
+		t.Fatalf("UnmarshalState legacy: %v", err)
+	}
+	if state.ID != "old" || len(state.Messages) != 1 {
+		t.Fatalf("legacy state = %#v", state)
+	}
+	text, ok := state.Messages[0].Content[0].(llm.TextContent)
+	if !ok || text.Text != "legacy" {
+		t.Fatalf("legacy content = %#v", state.Messages[0].Content[0])
+	}
+}
+
 func TestUnmarshalUnknownType(t *testing.T) {
 	_, err := UnmarshalState([]byte(`{"id":"x","messages":[{"role":"user","content":[{"type":"bogus"}]}]}`))
 	if err == nil {

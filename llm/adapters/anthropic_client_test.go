@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/shepard-labs/go-ai-sdk/anthropic"
+	"github.com/shepard-labs/go-ai-sdk/llm"
 )
 
 func TestREQADAPTER001_GoAISDKImportOnlyInAdapter(t *testing.T) {
@@ -79,8 +80,8 @@ func TestREQADAPTER003_UnknownFinishReasonMapsToError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate error = %v", err)
 	}
-	if result.FinishReason != FinishReasonError {
-		t.Fatalf("finish = %q, want %q", result.FinishReason, FinishReasonError)
+	if result.FinishReason.Unified != FinishReasonError {
+		t.Fatalf("finish = %q, want %q", result.FinishReason.Unified, FinishReasonError)
 	}
 }
 
@@ -144,7 +145,7 @@ func TestREQADAPTER_ToolUseAndToolResultConversion(t *testing.T) {
 	if tool, ok := user.Content[0].(anthropic.ToolResultContent); !ok || tool.ToolCallID != "call" || !tool.IsError {
 		t.Fatalf("user content = %#v, want ToolResultContent", user.Content[0])
 	}
-	if len(result.Content) != 2 || result.FinishReason != FinishReasonToolCalls {
+	if len(result.Content) != 2 || result.FinishReason.Unified != FinishReasonToolCalls {
 		t.Fatalf("result = %#v", result)
 	}
 }
@@ -158,6 +159,94 @@ func TestREQADAPTER_ToolSchemaConversion(t *testing.T) {
 	schema, ok := model.lastOptions.Tools[0].InputSchema.(map[string]any)
 	if !ok || schema["type"] != "object" {
 		t.Fatalf("schema = %#v, want decoded map", model.lastOptions.Tools[0].InputSchema)
+	}
+}
+
+func TestAnthropicToolChoiceMapping(t *testing.T) {
+	cases := []struct {
+		name     string
+		choice   ToolChoice
+		wantType string
+		wantName string
+	}{
+		{"auto", ToolChoice{Type: llm.ToolChoiceAuto}, "auto", ""},
+		{"required", ToolChoice{Type: llm.ToolChoiceRequired}, "any", ""},
+		{"tool", ToolChoice{Type: llm.ToolChoiceTool, ToolName: "lookup"}, "tool", "lookup"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model := &fakeAnthropicModel{result: &anthropic.GenerateResult{FinishReason: anthropic.FinishReasonStop}}
+			_, err := NewAnthropicAdapter(model).Generate(context.Background(), GenerateOptions{ToolChoice: tc.choice})
+			if err != nil {
+				t.Fatalf("Generate error = %v", err)
+			}
+			if model.lastOptions.ToolChoice == nil {
+				t.Fatalf("ToolChoice = nil, want %q", tc.wantType)
+			}
+			if model.lastOptions.ToolChoice.Type != tc.wantType || model.lastOptions.ToolChoice.Name != tc.wantName {
+				t.Fatalf("ToolChoice = %#v, want type %q name %q", model.lastOptions.ToolChoice, tc.wantType, tc.wantName)
+			}
+		})
+	}
+}
+
+func TestAnthropicToolChoiceNoneUnsupported(t *testing.T) {
+	model := &fakeAnthropicModel{result: &anthropic.GenerateResult{FinishReason: anthropic.FinishReasonStop}}
+	_, err := NewAnthropicAdapter(model).Generate(context.Background(), GenerateOptions{ToolChoice: ToolChoice{Type: llm.ToolChoiceNone}})
+	var ufe *llm.UnsupportedFeatureError
+	if !errors.As(err, &ufe) || ufe.Feature != "tool_choice_none" {
+		t.Fatalf("error = %v, want UnsupportedFeatureError(tool_choice_none)", err)
+	}
+}
+
+func TestAnthropicResponseFormatUnsupportedError(t *testing.T) {
+	model := &fakeAnthropicModel{result: &anthropic.GenerateResult{FinishReason: anthropic.FinishReasonStop}}
+	_, err := NewAnthropicAdapter(model).Generate(context.Background(), GenerateOptions{ResponseFormat: &ResponseFormat{Type: llm.ResponseFormatJSONObject}})
+	var ufe *llm.UnsupportedFeatureError
+	if !errors.As(err, &ufe) || ufe.Feature != "response_format" {
+		t.Fatalf("error = %v, want UnsupportedFeatureError(response_format)", err)
+	}
+}
+
+func TestAnthropicUnsupportedFeatureWarnPolicy(t *testing.T) {
+	model := &fakeAnthropicModel{result: &anthropic.GenerateResult{FinishReason: anthropic.FinishReasonStop}}
+	result, err := NewAnthropicAdapter(model).Generate(context.Background(), GenerateOptions{
+		ResponseFormat:           &ResponseFormat{Type: llm.ResponseFormatJSONObject},
+		UnsupportedFeaturePolicy: llm.UnsupportedFeaturePolicyWarn,
+	})
+	if err != nil {
+		t.Fatalf("Generate error = %v, want nil under warn policy", err)
+	}
+	if len(result.Warnings) == 0 || result.Warnings[0].Provider != "anthropic" {
+		t.Fatalf("warnings = %#v, want anthropic unsupported warning", result.Warnings)
+	}
+}
+
+func TestAnthropicResponseMetadata(t *testing.T) {
+	model := &fakeAnthropicModel{result: &anthropic.GenerateResult{
+		FinishReason:    anthropic.FinishReasonStop,
+		MessageMetadata: anthropic.MessageMetadata{"id": "msg_123", "model": "claude-x"},
+	}}
+	result, err := NewAnthropicAdapter(model).Generate(context.Background(), GenerateOptions{})
+	if err != nil {
+		t.Fatalf("Generate error = %v", err)
+	}
+	if result.Response.ID != "msg_123" || result.Response.ModelID != "claude-x" {
+		t.Fatalf("response metadata = %#v", result.Response)
+	}
+}
+
+func TestAnthropicWarningsPropagate(t *testing.T) {
+	model := &fakeAnthropicModel{result: &anthropic.GenerateResult{
+		FinishReason: anthropic.FinishReasonStop,
+		Warnings:     []anthropic.Warning{{Type: "x", Message: "heads up"}},
+	}}
+	result, err := NewAnthropicAdapter(model).Generate(context.Background(), GenerateOptions{})
+	if err != nil {
+		t.Fatalf("Generate error = %v", err)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Message != "heads up" || result.Warnings[0].Provider != "anthropic" {
+		t.Fatalf("warnings = %#v", result.Warnings)
 	}
 }
 

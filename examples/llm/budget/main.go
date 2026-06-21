@@ -45,7 +45,10 @@ func main() {
 		}
 	}
 
-	files := toolkit.Files(toolkit.FilesConfig{Roots: []string{workspace}})
+	files, err := toolkit.Files(toolkit.FilesConfig{Roots: []string{workspace}})
+	if err != nil {
+		log.Fatalf("files toolkit: %v", err)
+	}
 
 	const budget = 400 // small ceiling so trimming engages mid-run
 

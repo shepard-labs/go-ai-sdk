@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	googlesdk "github.com/shepard-labs/go-ai-sdk/google"
+	"github.com/shepard-labs/go-ai-sdk/llm"
 )
 
 // GoogleAdapter adapts a Google Gemini language model to the Client interface.
@@ -45,9 +46,28 @@ func NewGoogleClientWithSettings(settings GoogleSettings, modelID string) (Clien
 	return NewGoogleAdapter(provider.LanguageModel(modelID)), nil
 }
 
+// Capabilities reports the feature set supported by the Google adapter.
+func (a *GoogleAdapter) Capabilities() Capabilities {
+	return Capabilities{
+		Provider:           "google",
+		Streaming:          true,
+		ToolCalling:        true,
+		ToolChoiceAuto:     true,
+		ToolChoiceNone:     false,
+		ToolChoiceRequired: true,
+		ToolChoiceTool:     true,
+		StructuredOutput:   true,
+		JSONMode:           true,
+		Images:             true,
+		Reasoning:          true,
+		ParallelToolCalls:  true,
+		PromptCaching:      false,
+	}
+}
+
 // Generate sends a completion request through the Google SDK.
 func (a *GoogleAdapter) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
-	sdkOpts, err := toGoogleOptions(opts)
+	sdkOpts, warnings, err := toGoogleOptions(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -55,14 +75,18 @@ func (a *GoogleAdapter) Generate(ctx context.Context, opts GenerateOptions) (*Ge
 	if err != nil {
 		return nil, err
 	}
-	return fromGoogleResult(result), nil
+	out := fromGoogleResult(result)
+	if out != nil && len(warnings) > 0 {
+		out.Warnings = append(warnings, out.Warnings...)
+	}
+	return out, nil
 }
 
 // Stream sends a streaming completion request through the Google SDK and maps
 // provider-native StreamPart values into the neutral StreamPart union.
 // spec §1.1
 func (a *GoogleAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
-	sdkOpts, err := toGoogleOptions(opts)
+	sdkOpts, _, err := toGoogleOptions(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +110,7 @@ func (a *GoogleAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-cha
 				if !ok {
 					return
 				}
-				if mapped, emit := mapGoogleStreamPart(part); emit {
+				for _, mapped := range mapGoogleStreamPart(part) {
 					out <- mapped
 				}
 			}
@@ -95,44 +119,81 @@ func (a *GoogleAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-cha
 	return out, nil
 }
 
-// mapGoogleStreamPart converts a googlesdk.StreamPart to a neutral StreamPart.
-// Returns (zero, false) for parts with no neutral equivalent (StreamStart,
-// StreamResponseMetadata, StreamSource, StreamFile, StreamReasoningFile,
-// StreamToolResult). spec §1.1
-func mapGoogleStreamPart(part googlesdk.StreamPart) (StreamPart, bool) {
+// mapGoogleStreamPart converts a googlesdk.StreamPart to zero or more neutral
+// StreamParts. Returns nil for parts with no neutral equivalent (StreamSource,
+// StreamFile, StreamReasoningFile, StreamToolResult). spec §1.1
+func mapGoogleStreamPart(part googlesdk.StreamPart) []StreamPart {
 	switch p := part.(type) {
+	case googlesdk.StreamStart:
+		return googleStartWarnings(p.Warnings)
+	case googlesdk.StreamResponseMetadata:
+		meta := StreamMetadata{Response: ResponseMetadata{ID: p.ID, ModelID: p.ModelID}}
+		if p.Timestamp != nil {
+			meta.Response.Timestamp = *p.Timestamp
+		}
+		return []StreamPart{meta}
 	case googlesdk.StreamTextStart:
-		return StreamTextStart{}, true
+		return []StreamPart{StreamTextStart{}}
 	case googlesdk.StreamTextDelta:
-		return StreamTextDelta{Text: p.Text}, true
+		return []StreamPart{StreamTextDelta{Text: p.Text}}
 	case googlesdk.StreamTextEnd:
-		return StreamTextEnd{}, true
+		return []StreamPart{StreamTextEnd{}}
 	case googlesdk.StreamReasoningStart:
-		return StreamReasoningStart{}, true
+		return []StreamPart{StreamReasoningStart{}}
 	case googlesdk.StreamReasoningDelta:
-		return StreamReasoningDelta{Text: p.Text}, true
+		return []StreamPart{StreamReasoningDelta{Text: p.Text}}
 	case googlesdk.StreamReasoningEnd:
-		return StreamReasoningEnd{}, true
+		return []StreamPart{StreamReasoningEnd{}}
 	case googlesdk.StreamToolInputStart:
-		return StreamToolCallStart{ID: p.ID, Name: p.ToolName}, true
+		return []StreamPart{StreamToolCallStart{ID: p.ID, Name: p.ToolName}}
 	case googlesdk.StreamToolInputDelta:
-		return StreamToolInputDelta{ID: p.ID, JSON: p.Delta}, true
+		return []StreamPart{StreamToolInputDelta{ID: p.ID, JSON: p.Delta}}
 	case googlesdk.StreamToolInputEnd:
-		return StreamToolInputEnd{ID: p.ID}, true
+		return []StreamPart{StreamToolInputEnd{ID: p.ID}}
 	case googlesdk.StreamToolCall:
-		return StreamToolInputEnd{ID: p.ToolCall.ToolCallID, Input: cloneRawMessage(p.ToolCall.Input)}, true
+		return []StreamPart{StreamToolInputEnd{ID: p.ToolCall.ToolCallID, Input: cloneRawMessage(p.ToolCall.Input)}}
 	case googlesdk.StreamFinish:
-		return StreamFinish{FinishReason: fromUnifiedFinishReason(p.FinishReason.Unified), Usage: Usage{InputTokens: derefInt(p.Usage.InputTokens.Total), OutputTokens: derefInt(p.Usage.OutputTokens.Total)}}, true
+		return []StreamPart{StreamFinish{
+			FinishReason: fromUnifiedFinishReason(p.FinishReason.Unified),
+			Usage: Usage{
+				InputTokens:     derefInt(p.Usage.InputTokens.Total),
+				OutputTokens:    derefInt(p.Usage.OutputTokens.Total),
+				ReasoningTokens: derefInt(p.Usage.OutputTokens.Reasoning),
+			},
+			ProviderMetadata: googleProviderMetadata(p.ProviderMetadata),
+		}}
 	case googlesdk.StreamError:
-		return StreamError{Err: p.Err}, true
+		return []StreamPart{StreamError{Err: p.Err}}
 	case googlesdk.StreamRaw:
-		return StreamRaw{Bytes: p.Raw}, true
+		return []StreamPart{StreamRaw{Bytes: p.Raw}}
 	default:
-		return nil, false
+		return nil
 	}
 }
 
-func toGoogleOptions(opts GenerateOptions) (googlesdk.GenerateOptions, error) {
+// googleStartWarnings converts provider StreamStart warnings to neutral
+// StreamWarning parts.
+func googleStartWarnings(warnings []googlesdk.Warning) []StreamPart {
+	if len(warnings) == 0 {
+		return nil
+	}
+	out := make([]StreamPart, 0, len(warnings))
+	for _, w := range warnings {
+		out = append(out, StreamWarning{Warning: Warning{Code: w.Type, Message: w.Message, Provider: "google"}})
+	}
+	return out
+}
+
+// googleProviderMetadata wraps google provider metadata under the "google" key,
+// or returns nil when empty.
+func googleProviderMetadata(pm googlesdk.ProviderMetadata) ProviderMetadata {
+	if pm == nil {
+		return nil
+	}
+	return ProviderMetadata{"google": pm}
+}
+
+func toGoogleOptions(opts GenerateOptions) (googlesdk.GenerateOptions, []Warning, error) {
 	messages := make([]googlesdk.Message, 0, len(opts.Messages)+1)
 	if opts.System != "" {
 		messages = append(messages, googlesdk.SystemMessage{Content: opts.System})
@@ -140,20 +201,62 @@ func toGoogleOptions(opts GenerateOptions) (googlesdk.GenerateOptions, error) {
 	for _, message := range opts.Messages {
 		converted, err := toGoogleMessages(message)
 		if err != nil {
-			return googlesdk.GenerateOptions{}, err
+			return googlesdk.GenerateOptions{}, nil, err
 		}
 		messages = append(messages, converted...)
 	}
 	tools, err := toGoogleTools(opts.Tools)
 	if err != nil {
-		return googlesdk.GenerateOptions{}, err
+		return googlesdk.GenerateOptions{}, nil, err
 	}
 	sdkOpts := googlesdk.GenerateOptions{Messages: messages, Tools: tools}
 	if opts.MaxTokens > 0 {
 		maxTokens := opts.MaxTokens
 		sdkOpts.MaxOutputTokens = &maxTokens
 	}
-	return sdkOpts, nil
+	sdkOpts.Temperature = opts.Temperature
+	sdkOpts.TopP = opts.TopP
+	sdkOpts.TopK = opts.TopK
+	sdkOpts.StopSequences = opts.Stop
+	sdkOpts.Seed = opts.Seed
+
+	if opts.ToolChoice.Type != "" {
+		sdkOpts.ToolChoice = &googlesdk.ToolChoice{Type: string(opts.ToolChoice.Type), ToolName: opts.ToolChoice.ToolName}
+	}
+	if opts.ResponseFormat != nil {
+		rf, err := googleResponseFormat(opts.ResponseFormat)
+		if err != nil {
+			return googlesdk.GenerateOptions{}, nil, err
+		}
+		sdkOpts.ResponseFormat = rf
+	}
+	if opts.ProviderOptions != nil {
+		if po, ok := opts.ProviderOptions["google"]; ok {
+			sdkOpts.ProviderOptions = googlesdk.ProviderOptions{"google": po}
+		}
+	}
+	sdkOpts.Headers = toHTTPHeader(opts.Headers)
+	return sdkOpts, nil, nil
+}
+
+// googleResponseFormat maps a neutral ResponseFormat to the Google provider
+// form. Google uses Type "json" for both json_object and json_schema and
+// "text" otherwise; a schema is attached when present.
+func googleResponseFormat(rf *ResponseFormat) (*googlesdk.ResponseFormat, error) {
+	switch rf.Type {
+	case llm.ResponseFormatText:
+		return &googlesdk.ResponseFormat{Type: "text"}, nil
+	case llm.ResponseFormatJSONObject:
+		return &googlesdk.ResponseFormat{Type: "json", Name: rf.Name}, nil
+	case llm.ResponseFormatJSONSchema:
+		schema, err := decodeSchema(rf.JSONSchema)
+		if err != nil {
+			return nil, err
+		}
+		return &googlesdk.ResponseFormat{Type: "json", Schema: schema, Name: rf.Name}, nil
+	default:
+		return &googlesdk.ResponseFormat{Type: string(rf.Type), Name: rf.Name}, nil
+	}
 }
 
 func toGoogleMessages(message Message) ([]googlesdk.Message, error) {
@@ -235,11 +338,32 @@ func fromGoogleResult(result *googlesdk.GenerateResult) *GenerateResult {
 	if result == nil {
 		return nil
 	}
-	return &GenerateResult{
+	out := &GenerateResult{
 		Content:      fromGoogleContent(result.Content),
 		FinishReason: fromUnifiedFinishReason(result.FinishReason.Unified),
-		Usage:        Usage{InputTokens: derefInt(result.Usage.InputTokens.Total), OutputTokens: derefInt(result.Usage.OutputTokens.Total)},
+		Usage: Usage{
+			InputTokens:     derefInt(result.Usage.InputTokens.Total),
+			OutputTokens:    derefInt(result.Usage.OutputTokens.Total),
+			ReasoningTokens: derefInt(result.Usage.OutputTokens.Reasoning),
+		},
 	}
+	out.Response = ResponseMetadata{
+		ID:      result.Response.ID,
+		ModelID: result.Response.ModelID,
+		Headers: flattenHeader(result.Response.Headers),
+	}
+	if result.Response.Timestamp != nil {
+		out.Response.Timestamp = *result.Response.Timestamp
+	}
+	for _, w := range result.Warnings {
+		out.Warnings = append(out.Warnings, Warning{Code: w.Type, Message: w.Message, Provider: "google"})
+	}
+	if result.ProviderMetadata != nil {
+		pm := make(ProviderMetadata)
+		pm["google"] = result.ProviderMetadata
+		out.ProviderMetadata = pm
+	}
+	return out
 }
 
 func fromGoogleContent(contents []googlesdk.Content) []Content {

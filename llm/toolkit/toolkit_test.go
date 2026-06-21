@@ -20,15 +20,24 @@ func dispatch(t *testing.T, tk Toolkit, name string, input any) (json.RawMessage
 	return tk.Dispatch(context.Background(), name, raw)
 }
 
-var _ Toolkit = Files(FilesConfig{})
 var _ Toolkit = Shell(ShellConfig{})
 var _ Toolkit = Git(GitConfig{})
+
+// mustFiles builds a Files toolkit, failing the test on a constructor error.
+func mustFiles(t *testing.T, config FilesConfig) Toolkit {
+	t.Helper()
+	tk, err := Files(config)
+	if err != nil {
+		t.Fatalf("Files(%#v): %v", config, err)
+	}
+	return tk
+}
 
 // ---- Files ----
 
 func TestFilesReadWriteList(t *testing.T) {
 	root := t.TempDir()
-	tk := Files(FilesConfig{Roots: []string{root}})
+	tk := mustFiles(t, FilesConfig{Roots: []string{root}})
 
 	if _, err := dispatch(t, tk, "write_file", writeFileInput{Path: filepath.Join(root, "a.txt"), Content: "hello"}); err != nil {
 		t.Fatalf("write_file: %v", err)
@@ -57,19 +66,62 @@ func TestFilesReadWriteList(t *testing.T) {
 
 func TestFilesMaxReadBytes(t *testing.T) {
 	root := t.TempDir()
-	tk := Files(FilesConfig{Roots: []string{root}, MaxReadBytes: 4})
+	tk := mustFiles(t, FilesConfig{Roots: []string{root}, MaxReadBytes: 4})
 	os.WriteFile(filepath.Join(root, "big.txt"), []byte("0123456789"), 0o644)
-	raw, err := dispatch(t, tk, "read_file", readFileInput{Path: filepath.Join(root, "big.txt")})
+	if _, err := dispatch(t, tk, "read_file", readFileInput{Path: filepath.Join(root, "big.txt")}); err == nil {
+		t.Fatal("expected error for file exceeding MaxReadBytes")
+	}
+	// A file within the limit reads fine.
+	os.WriteFile(filepath.Join(root, "small.txt"), []byte("ok"), 0o644)
+	raw, err := dispatch(t, tk, "read_file", readFileInput{Path: filepath.Join(root, "small.txt")})
 	if err != nil {
-		t.Fatalf("read_file: %v", err)
+		t.Fatalf("read_file small: %v", err)
 	}
 	var read struct {
-		Content   string `json:"content"`
-		Truncated bool   `json:"truncated"`
+		Content string `json:"content"`
 	}
 	json.Unmarshal(raw, &read)
-	if read.Content != "0123" || !read.Truncated {
-		t.Fatalf("read = %#v, want truncated 0123", read)
+	if read.Content != "ok" {
+		t.Fatalf("read = %#v, want ok", read)
+	}
+}
+
+func TestFilesReadOnlyOmitsAndRejectsWrite(t *testing.T) {
+	root := t.TempDir()
+	tk := mustFiles(t, FilesConfig{Roots: []string{root}, ReadOnly: true})
+	for _, tool := range tk.Tools() {
+		if tool.Name == "write_file" {
+			t.Fatal("read-only toolkit exposes write_file")
+		}
+	}
+	if _, err := dispatch(t, tk, "write_file", writeFileInput{Path: filepath.Join(root, "x.txt"), Content: "x"}); err == nil {
+		t.Fatal("expected read-only write_file rejection")
+	}
+}
+
+func TestFilesEmptyRootsRejected(t *testing.T) {
+	if _, err := Files(FilesConfig{}); err == nil {
+		t.Fatal("expected error for empty Roots")
+	}
+}
+
+func TestFilesSearchMaxResults(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		os.WriteFile(filepath.Join(root, name), []byte("match"), 0o644)
+	}
+	tk := mustFiles(t, FilesConfig{Roots: []string{root}, MaxSearchResults: 2})
+	raw, err := dispatch(t, tk, "search_files", searchFilesInput{Path: root, Pattern: "match"})
+	if err != nil {
+		t.Fatalf("search_files: %v", err)
+	}
+	var out struct {
+		Matches   []string `json:"matches"`
+		Truncated bool     `json:"truncated"`
+	}
+	json.Unmarshal(raw, &out)
+	if len(out.Matches) != 2 || !out.Truncated {
+		t.Fatalf("search = %#v, want 2 matches truncated", out)
 	}
 }
 
@@ -77,7 +129,7 @@ func TestFilesRejectsTraversal(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "secret.txt")
 	os.WriteFile(outside, []byte("secret"), 0o644)
-	tk := Files(FilesConfig{Roots: []string{root}})
+	tk := mustFiles(t, FilesConfig{Roots: []string{root}})
 
 	if _, err := dispatch(t, tk, "read_file", readFileInput{Path: filepath.Join(root, "..", filepath.Base(filepath.Dir(outside)), "secret.txt")}); err == nil {
 		t.Fatal("expected traversal rejection")
@@ -104,7 +156,7 @@ func TestFilesRejectsSymlinkEscape(t *testing.T) {
 	if err := os.Symlink(outsideDir, link); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
-	tk := Files(FilesConfig{Roots: []string{root}})
+	tk := mustFiles(t, FilesConfig{Roots: []string{root}})
 	if _, err := dispatch(t, tk, "read_file", readFileInput{Path: filepath.Join(link, "secret.txt")}); err == nil {
 		t.Fatal("expected symlink escape rejection")
 	}
@@ -114,7 +166,7 @@ func TestFilesSearch(t *testing.T) {
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "a.txt"), []byte("find me here"), 0o644)
 	os.WriteFile(filepath.Join(root, "b.txt"), []byte("nothing"), 0o644)
-	tk := Files(FilesConfig{Roots: []string{root}})
+	tk := mustFiles(t, FilesConfig{Roots: []string{root}})
 	raw, err := dispatch(t, tk, "search_files", searchFilesInput{Path: root, Pattern: "find me"})
 	if err != nil {
 		t.Fatalf("search_files: %v", err)
@@ -196,7 +248,7 @@ func TestGitStatusAndLog(t *testing.T) {
 
 func TestToolsAndMerge(t *testing.T) {
 	root := t.TempDir()
-	files := Files(FilesConfig{Roots: []string{root}})
+	files := mustFiles(t, FilesConfig{Roots: []string{root}})
 	shell := Shell(ShellConfig{AllowedCmds: []string{"echo"}})
 	all := Tools(files, shell)
 	if len(all) != 5 {
@@ -221,7 +273,7 @@ func TestMergePanicsOnDuplicate(t *testing.T) {
 		}
 	}()
 	root := t.TempDir()
-	Merge(Files(FilesConfig{Roots: []string{root}}), Files(FilesConfig{Roots: []string{root}}))
+	Merge(mustFiles(t, FilesConfig{Roots: []string{root}}), mustFiles(t, FilesConfig{Roots: []string{root}}))
 }
 
 var _ llm.ToolDispatcher = Merge()

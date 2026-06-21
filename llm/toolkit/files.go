@@ -16,15 +16,25 @@ import (
 // defaultMaxReadBytes caps read_file / search_files output at 1 MiB.
 const defaultMaxReadBytes = 1 << 20
 
+// defaultMaxSearchResults caps the number of matches returned by search_files.
+const defaultMaxSearchResults = 500
+
 // FilesConfig configures the Files toolkit.
 type FilesConfig struct {
 	// Roots are the allowed root directories. Every path argument must resolve
 	// (after symlink evaluation) to a location inside one of these roots;
-	// attempts to escape via "../" or symlinks are rejected.
+	// attempts to escape via "../" or symlinks are rejected. Roots must be
+	// non-empty: Files returns an error when no roots are configured.
 	Roots []string
 	// MaxReadBytes caps the bytes returned by read_file and per-file matches in
 	// search_files. Defaults to 1 MiB when zero.
 	MaxReadBytes int
+	// MaxSearchResults caps the number of matches search_files returns.
+	// Defaults to 500 when zero.
+	MaxSearchResults int
+	// ReadOnly, when true, omits write_file from Tools() and rejects any
+	// write_file dispatch. Use it to expose a strictly read-only filesystem view.
+	ReadOnly bool
 }
 
 // filesToolkit implements filesystem tools scoped to a set of roots.
@@ -33,11 +43,15 @@ type FilesConfig struct {
 // filepath.EvalSymlinks and then prefix-checked against the cleaned, symlink-
 // resolved roots. A path that resolves outside every root — whether through
 // "../" traversal or a symlink pointing elsewhere — is rejected before any I/O
-// touches the target. read_file and search_files enforce MaxReadBytes.
+// touches the target. Symlinks are followed but the resolved path must remain
+// within a configured root. read_file and search_files enforce MaxReadBytes,
+// and search_files additionally caps results at MaxSearchResults.
 type filesToolkit struct {
-	roots        []string
-	maxReadBytes int
-	tools        []llm.Tool
+	roots            []string
+	maxReadBytes     int
+	maxSearchResults int
+	readOnly         bool
+	tools            []llm.Tool
 }
 
 type readFileInput struct {
@@ -58,11 +72,20 @@ type searchFilesInput struct {
 	Pattern string `json:"pattern" description:"substring to search for in file contents"`
 }
 
-// Files creates a filesystem toolkit scoped to the configured roots.
-func Files(config FilesConfig) Toolkit {
+// Files creates a filesystem toolkit scoped to the configured roots. It returns
+// an error when Roots is empty, since an unrooted filesystem toolkit would have
+// no boundary to enforce.
+func Files(config FilesConfig) (Toolkit, error) {
+	if len(config.Roots) == 0 {
+		return nil, fmt.Errorf("toolkit: Files requires at least one root")
+	}
 	maxRead := config.MaxReadBytes
 	if maxRead <= 0 {
 		maxRead = defaultMaxReadBytes
+	}
+	maxResults := config.MaxSearchResults
+	if maxResults <= 0 {
+		maxResults = defaultMaxSearchResults
 	}
 	roots := make([]string, 0, len(config.Roots))
 	for _, root := range config.Roots {
@@ -72,14 +95,17 @@ func Files(config FilesConfig) Toolkit {
 			roots = append(roots, filepath.Clean(abs))
 		}
 	}
-	tk := &filesToolkit{roots: roots, maxReadBytes: maxRead}
-	tk.tools = mustTools(
+	tk := &filesToolkit{roots: roots, maxReadBytes: maxRead, maxSearchResults: maxResults, readOnly: config.ReadOnly}
+	tools := []toolResult{
 		schemaTool("read_file", "Read the contents of a file.", readFileInput{}),
-		schemaTool("write_file", "Write content to a file, creating or overwriting it.", writeFileInput{}),
 		schemaTool("list_dir", "List the entries of a directory.", listDirInput{}),
 		schemaTool("search_files", "Search files under a directory for a substring.", searchFilesInput{}),
-	)
-	return tk
+	}
+	if !config.ReadOnly {
+		tools = append(tools, schemaTool("write_file", "Write content to a file, creating or overwriting it.", writeFileInput{}))
+	}
+	tk.tools = mustTools(tools...)
+	return tk, nil
 }
 
 func (t *filesToolkit) Tools() []llm.Tool { return t.tools }
@@ -89,6 +115,9 @@ func (t *filesToolkit) Dispatch(ctx context.Context, name string, input json.Raw
 	case "read_file":
 		return t.readFile(input)
 	case "write_file":
+		if t.readOnly {
+			return nil, fmt.Errorf("write_file: toolkit is read-only")
+		}
 		return t.writeFile(input)
 	case "list_dir":
 		return t.listDir(input)
@@ -108,16 +137,17 @@ func (t *filesToolkit) readFile(input json.RawMessage) (json.RawMessage, error) 
 	if err != nil {
 		return nil, err
 	}
+	if info, err := os.Stat(path); err == nil && info.Size() > int64(t.maxReadBytes) {
+		return nil, fmt.Errorf("read_file: file size %d exceeds limit %d bytes", info.Size(), t.maxReadBytes)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read_file: %w", err)
 	}
-	truncated := false
 	if len(data) > t.maxReadBytes {
-		data = data[:t.maxReadBytes]
-		truncated = true
+		return nil, fmt.Errorf("read_file: file size %d exceeds limit %d bytes", len(data), t.maxReadBytes)
 	}
-	return jsonResult(map[string]any{"content": string(data), "truncated": truncated})
+	return jsonResult(map[string]any{"content": string(data)})
 }
 
 func (t *filesToolkit) writeFile(input json.RawMessage) (json.RawMessage, error) {
@@ -170,6 +200,7 @@ func (t *filesToolkit) searchFiles(input json.RawMessage) (json.RawMessage, erro
 		return nil, err
 	}
 	var matches []string
+	truncated := false
 	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -187,13 +218,17 @@ func (t *filesToolkit) searchFiles(input json.RawMessage) (json.RawMessage, erro
 		}
 		if strings.Contains(string(data), in.Pattern) {
 			matches = append(matches, path)
+			if len(matches) >= t.maxSearchResults {
+				truncated = true
+				return filepath.SkipAll
+			}
 		}
 		return nil
 	})
 	if walkErr != nil {
 		return nil, fmt.Errorf("search_files: %w", walkErr)
 	}
-	return jsonResult(map[string]any{"matches": matches})
+	return jsonResult(map[string]any{"matches": matches, "truncated": truncated})
 }
 
 // resolveInRoot resolves an existing path and verifies it lies within a root.

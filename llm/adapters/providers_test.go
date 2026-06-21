@@ -3,11 +3,14 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/shepard-labs/go-ai-sdk/cohere"
 	"github.com/shepard-labs/go-ai-sdk/google"
+	"github.com/shepard-labs/go-ai-sdk/llm"
 	"github.com/shepard-labs/go-ai-sdk/openrouter"
 )
 
@@ -59,11 +62,43 @@ func TestGoogleAdapterTranslation(t *testing.T) {
 	if model.lastOptions.MaxOutputTokens == nil || *model.lastOptions.MaxOutputTokens != 10 {
 		t.Fatalf("max output tokens = %v", model.lastOptions.MaxOutputTokens)
 	}
-	if result.FinishReason != FinishReasonToolCalls || len(result.Content) != 1 {
+	if result.FinishReason.Unified != FinishReasonToolCalls || len(result.Content) != 1 {
 		t.Fatalf("result = %#v", result)
 	}
 	if result.Usage.InputTokens != 2 || result.Usage.OutputTokens != 3 {
 		t.Fatalf("usage = %#v", result.Usage)
+	}
+}
+
+func TestGoogleNewFieldsWiring(t *testing.T) {
+	ts := time.Now()
+	model := &fakeGoogleModel{result: &google.GenerateResult{
+		FinishReason: google.FinishReason{Unified: "stop"},
+		Response:     google.ResponseMetadata{ID: "g1", ModelID: "gemini-x", Timestamp: &ts, Headers: http.Header{"X-G": []string{"v"}}},
+	}}
+	result, err := NewGoogleAdapter(model).Generate(context.Background(), GenerateOptions{
+		ToolChoice:      ToolChoice{Type: llm.ToolChoiceRequired},
+		ResponseFormat:  &ResponseFormat{Type: llm.ResponseFormatJSONObject},
+		ProviderOptions: llm.ProviderOptions{"google": {"k": "v"}},
+		Headers:         map[string]string{"X-Test": "1"},
+	})
+	if err != nil {
+		t.Fatalf("Generate error = %v", err)
+	}
+	if model.lastOptions.ToolChoice == nil || model.lastOptions.ToolChoice.Type != "required" {
+		t.Fatalf("tool choice = %#v", model.lastOptions.ToolChoice)
+	}
+	if model.lastOptions.ResponseFormat == nil || model.lastOptions.ResponseFormat.Type != "json" {
+		t.Fatalf("response format = %#v", model.lastOptions.ResponseFormat)
+	}
+	if model.lastOptions.ProviderOptions["google"]["k"] != "v" {
+		t.Fatalf("provider options = %#v", model.lastOptions.ProviderOptions)
+	}
+	if model.lastOptions.Headers.Get("X-Test") != "1" {
+		t.Fatalf("headers = %#v", model.lastOptions.Headers)
+	}
+	if result.Response.ID != "g1" || result.Response.ModelID != "gemini-x" || result.Response.Headers["X-G"] != "v" {
+		t.Fatalf("response metadata = %#v", result.Response)
 	}
 }
 
@@ -101,7 +136,7 @@ func TestCohereAdapterTranslation(t *testing.T) {
 	if call, ok := assistant.Content[0].(cohere.ToolCallContent); !ok || call.ToolName != "t" {
 		t.Fatalf("assistant content = %#v", assistant.Content[0])
 	}
-	if result.FinishReason != FinishReasonStop {
+	if result.FinishReason.Unified != FinishReasonStop {
 		t.Fatalf("finish = %q", result.FinishReason)
 	}
 	if result.Usage.InputTokens != 1 || result.Usage.OutputTokens != 8 {
@@ -159,7 +194,7 @@ func TestOpenRouterAdapterTranslation(t *testing.T) {
 	if res.ToolCallID != "id" || res.Output != "done" {
 		t.Fatalf("tool result = %#v", res)
 	}
-	if result.FinishReason != FinishReasonToolCalls {
+	if result.FinishReason.Unified != FinishReasonToolCalls {
 		t.Fatalf("finish = %q", result.FinishReason)
 	}
 	use := result.Content[0].(ToolUseContent)
@@ -169,5 +204,41 @@ func TestOpenRouterAdapterTranslation(t *testing.T) {
 	}
 	if result.Usage.InputTokens != 6 || result.Usage.OutputTokens != 7 {
 		t.Fatalf("usage = %#v", result.Usage)
+	}
+}
+
+func TestOpenRouterNewFieldsWiring(t *testing.T) {
+	model := &fakeOpenRouterModel{result: &openrouter.GenerateResult{
+		FinishReason: openrouter.FinishReasonStop,
+		Warnings:     []openrouter.Warning{{Type: "x", Message: "warn"}},
+		Response:     openrouter.ResponseMetadata{ID: "or1", ModelID: "or-x", Headers: http.Header{"X-O": []string{"v"}}},
+	}}
+	schema := json.RawMessage(`{"type":"object"}`)
+	result, err := NewOpenRouterAdapter(model).Generate(context.Background(), GenerateOptions{
+		ToolChoice:      ToolChoice{Type: llm.ToolChoiceTool, ToolName: "fn"},
+		ResponseFormat:  &ResponseFormat{Type: llm.ResponseFormatJSONSchema, Name: "out", JSONSchema: schema},
+		ProviderOptions: llm.ProviderOptions{"openrouter": {"k": "v"}},
+		Headers:         map[string]string{"X-Test": "1"},
+	})
+	if err != nil {
+		t.Fatalf("Generate error = %v", err)
+	}
+	if model.lastOptions.ToolChoice.Type != "tool" || model.lastOptions.ToolChoice.ToolName != "fn" {
+		t.Fatalf("tool choice = %#v", model.lastOptions.ToolChoice)
+	}
+	if model.lastOptions.ResponseFormat == nil || model.lastOptions.ResponseFormat.Type != "json_schema" || model.lastOptions.ResponseFormat.Schema == nil {
+		t.Fatalf("response format = %#v", model.lastOptions.ResponseFormat)
+	}
+	if model.lastOptions.ProviderOptions["openrouter"]["k"] != "v" {
+		t.Fatalf("provider options = %#v", model.lastOptions.ProviderOptions)
+	}
+	if model.lastOptions.Headers.Get("X-Test") != "1" {
+		t.Fatalf("headers = %#v", model.lastOptions.Headers)
+	}
+	if result.Response.ID != "or1" || result.Response.ModelID != "or-x" || result.Response.Headers["X-O"] != "v" {
+		t.Fatalf("response metadata = %#v", result.Response)
+	}
+	if len(result.Warnings) == 0 || result.Warnings[len(result.Warnings)-1].Message != "warn" {
+		t.Fatalf("warnings = %#v", result.Warnings)
 	}
 }

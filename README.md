@@ -29,7 +29,7 @@ Provider-neutral `llm` packages:
 github.com/shepard-labs/go-ai-sdk/llm                    // Client, messages, tools, agent loops, failover, cache
 github.com/shepard-labs/go-ai-sdk/llm/adapters           // direct adapter constructors
 github.com/shepard-labs/go-ai-sdk/llm/adapters/anthropic // registry blank import for "anthropic:<model>"
-github.com/shepard-labs/go-ai-sdk/llm/adapters/cohere
+github.com/shepard-labs/go-ai-sdk/llm/adapters/cohere    // available, not in the production-neutral matrix yet
 github.com/shepard-labs/go-ai-sdk/llm/adapters/google
 github.com/shepard-labs/go-ai-sdk/llm/adapters/openai
 github.com/shepard-labs/go-ai-sdk/llm/adapters/openaicompatible
@@ -50,6 +50,27 @@ github.com/shepard-labs/go-ai-sdk/llm/toolkit            // file and shell tools
 The `llm` package sits above provider subpackages. It defines a small `Client` interface (`Generate` and `Stream`), normalized messages and tools, optional `WithFailover` and `WithCache` decorators, and `AgentLoopWithOptions` for multi-turn tool use with terminal tools, validation policies, token budgets, and usage tracking. Implement `ToolDispatcher` to run tools (any registry that exposes `Dispatch(ctx, name, input)` works).
 
 Provider adapters can be used directly from `llm/adapters`, or registered by blank-importing one of the adapter registration packages and calling `registry.NewClient`.
+
+### Production-Neutral Contract
+
+The production-neutral `llm` contract targets Anthropic, OpenAI, OpenAI-compatible providers, Google, and OpenRouter. Cohere remains available as a native provider package and adapter, but it is not implemented in the production-neutral compatibility matrix yet.
+
+The neutral request API includes messages, tools, max tokens, sampling controls (`Temperature`, `TopP`, `TopK`), stop sequences, seed, tool choice, response format, request headers, request metadata, provider options, and an unsupported-feature policy. Explicit unsupported options default to strict errors; set `UnsupportedFeaturePolicyWarn` when you want documented fallback behavior plus warnings.
+
+The neutral result API preserves content, structured finish reasons (`Unified` plus raw provider value), expanded usage, warnings, request metadata, response metadata, and provider metadata. Provider-specific escape hatches live under `ProviderOptions` keys such as `"anthropic"`, `"openai"`, `"google"`, or `"openrouter"`.
+
+| Provider | Adapter | Generate | Stream | Tools | Tool Choice | Structured Output | Images | Metadata / Warnings | Conformance |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Anthropic | ✅ | ✅ | ✅ | ✅ | ⚠️ `none` unsupported | ❌ neutral `ResponseFormat` not implemented | ✅ | ✅ | ✅ |
+| OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| OpenAI-compatible | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ endpoint-dependent | ✅ endpoint-dependent | ✅ | ✅ |
+| Google | ✅ | ✅ | ✅ | ✅ | ⚠️ `none` unsupported | ✅ | ✅ | ✅ | ✅ |
+| OpenRouter | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cohere | ❌ not implemented | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+Streaming uses typed `StreamPart` events for text, reasoning, tool input deltas, warnings, metadata, finish, errors, and raw provider bytes where available. Use `CollectStream` to drain a stream into a `GenerateResult` while preserving warnings, metadata, usage, provider metadata, and partial content on errors.
+
+The neutral error model includes `UnsupportedFeatureError`, `APIError`, and helpers such as `IsRateLimit`, `IsAuth`, `IsInvalidRequest`, `IsUnsupported`, and `RetryAfter`. Middleware includes retry, failover, and cache wrappers; cache stores `Generate` results only and forwards `Stream` calls uncached.
 
 ```go
 package main

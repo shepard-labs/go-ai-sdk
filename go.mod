@@ -4,12 +4,12 @@ go 1.25.8
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/shepard-labs/go-ai-sdk/anthropic v1.0.5
+	github.com/shepard-labs/go-ai-sdk/anthropic v1.0.6
 	github.com/shepard-labs/go-ai-sdk/cohere v1.0.5
-	github.com/shepard-labs/go-ai-sdk/google v1.0.5
+	github.com/shepard-labs/go-ai-sdk/google v1.0.6
 	github.com/shepard-labs/go-ai-sdk/openai v1.0.5
-	github.com/shepard-labs/go-ai-sdk/openaicompatible v1.0.5
-	github.com/shepard-labs/go-ai-sdk/openrouter v1.0.5
+	github.com/shepard-labs/go-ai-sdk/openaicompatible v1.0.6
+	github.com/shepard-labs/go-ai-sdk/openrouter v1.0.6
 	github.com/shepard-labs/go-clients/storage v1.0.2
 )
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/shepard-labs/go-ai-sdk/llm"
 	openroutersdk "github.com/shepard-labs/go-ai-sdk/openrouter"
 )
 
@@ -45,9 +46,28 @@ func NewOpenRouterClientWithSettings(settings OpenRouterSettings, modelID string
 	return NewOpenRouterAdapter(provider.LanguageModel(modelID)), nil
 }
 
+// Capabilities reports the feature set supported by the OpenRouter adapter.
+func (a *OpenRouterAdapter) Capabilities() Capabilities {
+	return Capabilities{
+		Provider:           "openrouter",
+		Streaming:          true,
+		ToolCalling:        true,
+		ToolChoiceAuto:     true,
+		ToolChoiceNone:     true,
+		ToolChoiceRequired: true,
+		ToolChoiceTool:     true,
+		StructuredOutput:   true,
+		JSONMode:           true,
+		Images:             true,
+		Reasoning:          true,
+		ParallelToolCalls:  true,
+		PromptCaching:      false,
+	}
+}
+
 // Generate sends a completion request through the OpenRouter SDK.
 func (a *OpenRouterAdapter) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
-	sdkOpts, err := toOpenRouterOptions(opts)
+	sdkOpts, warnings, err := toOpenRouterOptions(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -55,14 +75,18 @@ func (a *OpenRouterAdapter) Generate(ctx context.Context, opts GenerateOptions) 
 	if err != nil {
 		return nil, err
 	}
-	return fromOpenRouterResult(result), nil
+	out := fromOpenRouterResult(result)
+	if out != nil && len(warnings) > 0 {
+		out.Warnings = append(warnings, out.Warnings...)
+	}
+	return out, nil
 }
 
 // Stream sends a streaming completion request through the OpenRouter SDK and
 // maps provider-native StreamPart values into the neutral StreamPart union.
 // spec §1.1
 func (a *OpenRouterAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
-	sdkOpts, err := toOpenRouterOptions(opts)
+	sdkOpts, _, err := toOpenRouterOptions(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +110,7 @@ func (a *OpenRouterAdapter) Stream(ctx context.Context, opts GenerateOptions) (<
 				if !ok {
 					return
 				}
-				if mapped, emit := mapOpenRouterStreamPart(part); emit {
+				for _, mapped := range mapOpenRouterStreamPart(part) {
 					out <- mapped
 				}
 			}
@@ -95,43 +119,64 @@ func (a *OpenRouterAdapter) Stream(ctx context.Context, opts GenerateOptions) (<
 	return out, nil
 }
 
-// mapOpenRouterStreamPart converts an openroutersdk.StreamPart to a neutral
-// StreamPart. Returns (zero, false) for parts with no neutral equivalent
-// (StreamResponseMetadata, StreamFile, StreamSource). spec §1.1
-func mapOpenRouterStreamPart(part openroutersdk.StreamPart) (StreamPart, bool) {
+// mapOpenRouterStreamPart converts an openroutersdk.StreamPart to zero or more
+// neutral StreamParts. Returns nil for parts with no neutral equivalent
+// (StreamFile, StreamSource). spec §1.1
+func mapOpenRouterStreamPart(part openroutersdk.StreamPart) []StreamPart {
 	switch p := part.(type) {
+	case openroutersdk.StreamResponseMetadata:
+		return []StreamPart{StreamMetadata{Response: ResponseMetadata{ID: p.ID, ModelID: p.ModelID}}}
 	case openroutersdk.StreamTextStart:
-		return StreamTextStart{}, true
+		return []StreamPart{StreamTextStart{}}
 	case openroutersdk.StreamTextDelta:
-		return StreamTextDelta{Text: p.Delta}, true
+		return []StreamPart{StreamTextDelta{Text: p.Delta}}
 	case openroutersdk.StreamTextEnd:
-		return StreamTextEnd{}, true
+		return []StreamPart{StreamTextEnd{}}
 	case openroutersdk.StreamReasoningStart:
-		return StreamReasoningStart{}, true
+		return []StreamPart{StreamReasoningStart{}}
 	case openroutersdk.StreamReasoningDelta:
-		return StreamReasoningDelta{Text: p.Delta}, true
+		return []StreamPart{StreamReasoningDelta{Text: p.Delta}}
 	case openroutersdk.StreamReasoningEnd:
-		return StreamReasoningEnd{}, true
+		return []StreamPart{StreamReasoningEnd{}}
 	case openroutersdk.StreamToolInputStart:
-		return StreamToolCallStart{ID: p.ID, Name: p.ToolName}, true
+		return []StreamPart{StreamToolCallStart{ID: p.ID, Name: p.ToolName}}
 	case openroutersdk.StreamToolInputDelta:
-		return StreamToolInputDelta{ID: p.ID, JSON: p.Delta}, true
+		return []StreamPart{StreamToolInputDelta{ID: p.ID, JSON: p.Delta}}
 	case openroutersdk.StreamToolInputEnd:
-		return StreamToolInputEnd{ID: p.ID}, true
+		return []StreamPart{StreamToolInputEnd{ID: p.ID}}
 	case openroutersdk.StreamToolCall:
-		return StreamToolInputEnd{ID: p.ToolCallID, Input: openRouterInputToRaw(p.Input)}, true
+		return []StreamPart{StreamToolInputEnd{ID: p.ToolCallID, Input: openRouterInputToRaw(p.Input)}}
 	case openroutersdk.StreamFinish:
-		return StreamFinish{FinishReason: fromOpenRouterFinishReason(p.FinishReason), Usage: Usage{InputTokens: p.Usage.InputTokens, OutputTokens: p.Usage.OutputTokens}}, true
+		return []StreamPart{StreamFinish{
+			FinishReason: fromOpenRouterFinishReason(p.FinishReason),
+			Usage: Usage{
+				InputTokens:       p.Usage.InputTokens,
+				OutputTokens:      p.Usage.OutputTokens,
+				TotalTokens:       p.Usage.TotalTokens,
+				CachedInputTokens: p.Usage.InputTokensDetails.CachedTokens,
+				ReasoningTokens:   p.Usage.OutputTokensDetails.ReasoningTokens,
+			},
+			ProviderMetadata: openRouterProviderMetadata(p.ProviderMetadata),
+		}}
 	case openroutersdk.StreamError:
-		return StreamError{Err: p.Err}, true
+		return []StreamPart{StreamError{Err: p.Err}}
 	case openroutersdk.StreamRaw:
-		return StreamRaw{}, true
+		return []StreamPart{StreamRaw{}}
 	default:
-		return nil, false
+		return nil
 	}
 }
 
-func toOpenRouterOptions(opts GenerateOptions) (openroutersdk.GenerateOptions, error) {
+// openRouterProviderMetadata wraps openrouter provider metadata under the
+// "openrouter" key, or returns nil when empty.
+func openRouterProviderMetadata(pm openroutersdk.ProviderMetadata) ProviderMetadata {
+	if pm == nil {
+		return nil
+	}
+	return ProviderMetadata{"openrouter": pm}
+}
+
+func toOpenRouterOptions(opts GenerateOptions) (openroutersdk.GenerateOptions, []Warning, error) {
 	messages := make([]openroutersdk.Message, 0, len(opts.Messages)+1)
 	if opts.System != "" {
 		messages = append(messages, openroutersdk.SystemMessage{Content: opts.System})
@@ -139,20 +184,61 @@ func toOpenRouterOptions(opts GenerateOptions) (openroutersdk.GenerateOptions, e
 	for _, message := range opts.Messages {
 		converted, err := toOpenRouterMessages(message)
 		if err != nil {
-			return openroutersdk.GenerateOptions{}, err
+			return openroutersdk.GenerateOptions{}, nil, err
 		}
 		messages = append(messages, converted...)
 	}
 	tools, err := toOpenRouterTools(opts.Tools)
 	if err != nil {
-		return openroutersdk.GenerateOptions{}, err
+		return openroutersdk.GenerateOptions{}, nil, err
 	}
 	sdkOpts := openroutersdk.GenerateOptions{Messages: messages, Tools: tools}
 	if opts.MaxTokens > 0 {
 		maxTokens := opts.MaxTokens
 		sdkOpts.MaxTokens = &maxTokens
 	}
-	return sdkOpts, nil
+	sdkOpts.Temperature = opts.Temperature
+	sdkOpts.TopP = opts.TopP
+	sdkOpts.TopK = opts.TopK
+	sdkOpts.Stop = opts.Stop
+	sdkOpts.Seed = opts.Seed
+
+	if opts.ToolChoice.Type != "" {
+		sdkOpts.ToolChoice = openroutersdk.ToolChoice{Type: string(opts.ToolChoice.Type), ToolName: opts.ToolChoice.ToolName}
+	}
+	if opts.ResponseFormat != nil {
+		rf, err := openRouterResponseFormat(opts.ResponseFormat)
+		if err != nil {
+			return openroutersdk.GenerateOptions{}, nil, err
+		}
+		sdkOpts.ResponseFormat = rf
+	}
+	if opts.ProviderOptions != nil {
+		if po, ok := opts.ProviderOptions["openrouter"]; ok {
+			sdkOpts.ProviderOptions = openroutersdk.ProviderOptions{"openrouter": po}
+		}
+	}
+	sdkOpts.Headers = toHTTPHeader(opts.Headers)
+	return sdkOpts, nil, nil
+}
+
+// openRouterResponseFormat maps a neutral ResponseFormat to the OpenRouter
+// provider form. OpenRouter uses "json_object"/"json_schema" types directly.
+func openRouterResponseFormat(rf *ResponseFormat) (*openroutersdk.ResponseFormat, error) {
+	switch rf.Type {
+	case llm.ResponseFormatText:
+		return &openroutersdk.ResponseFormat{Type: "text"}, nil
+	case llm.ResponseFormatJSONObject:
+		return &openroutersdk.ResponseFormat{Type: "json_object", Name: rf.Name, Strict: rf.Strict}, nil
+	case llm.ResponseFormatJSONSchema:
+		schema, err := decodeSchema(rf.JSONSchema)
+		if err != nil {
+			return nil, err
+		}
+		return &openroutersdk.ResponseFormat{Type: "json_schema", Schema: schema, Name: rf.Name, Strict: rf.Strict}, nil
+	default:
+		return &openroutersdk.ResponseFormat{Type: string(rf.Type), Name: rf.Name, Strict: rf.Strict}, nil
+	}
 }
 
 func toOpenRouterMessages(message Message) ([]openroutersdk.Message, error) {
@@ -216,11 +302,32 @@ func fromOpenRouterResult(result *openroutersdk.GenerateResult) *GenerateResult 
 	if result == nil {
 		return nil
 	}
-	return &GenerateResult{
+	out := &GenerateResult{
 		Content:      fromOpenRouterContent(result.Content),
 		FinishReason: fromOpenRouterFinishReason(result.FinishReason),
-		Usage:        Usage{InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens},
+		Usage: Usage{
+			InputTokens:       result.Usage.InputTokens,
+			OutputTokens:      result.Usage.OutputTokens,
+			TotalTokens:       result.Usage.TotalTokens,
+			CachedInputTokens: result.Usage.InputTokensDetails.CachedTokens,
+			ReasoningTokens:   result.Usage.OutputTokensDetails.ReasoningTokens,
+		},
 	}
+	out.Response = ResponseMetadata{
+		ID:        result.Response.ID,
+		ModelID:   result.Response.ModelID,
+		Headers:   flattenHeader(result.Response.Headers),
+		Timestamp: result.Response.Timestamp,
+	}
+	for _, w := range result.Warnings {
+		out.Warnings = append(out.Warnings, Warning{Code: w.Type, Message: w.Message, Provider: "openrouter"})
+	}
+	if result.ProviderMetadata != nil {
+		pm := make(ProviderMetadata)
+		pm["openrouter"] = result.ProviderMetadata
+		out.ProviderMetadata = pm
+	}
+	return out
 }
 
 func fromOpenRouterContent(contents []openroutersdk.Content) []Content {
@@ -237,15 +344,20 @@ func fromOpenRouterContent(contents []openroutersdk.Content) []Content {
 }
 
 func fromOpenRouterFinishReason(reason openroutersdk.FinishReason) FinishReason {
+	raw := string(reason)
 	switch reason {
 	case openroutersdk.FinishReasonStop:
-		return FinishReasonStop
+		return FinishReason{Unified: FinishReasonStop, Raw: raw}
 	case openroutersdk.FinishReasonToolCalls:
-		return FinishReasonToolCalls
+		return FinishReason{Unified: FinishReasonToolCalls, Raw: raw}
 	case openroutersdk.FinishReasonLength:
-		return FinishReasonLength
+		return FinishReason{Unified: FinishReasonLength, Raw: raw}
+	case openroutersdk.FinishReasonContentFilter:
+		return FinishReason{Unified: FinishReasonContentFilter, Raw: raw}
+	case openroutersdk.FinishReasonOther:
+		return FinishReason{Unified: FinishReasonOther, Raw: raw}
 	default:
-		return FinishReasonError
+		return FinishReason{Unified: FinishReasonError, Raw: raw}
 	}
 }
 

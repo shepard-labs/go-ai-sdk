@@ -3,9 +3,12 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"regexp"
 	"testing"
+	"time"
 
+	"github.com/shepard-labs/go-ai-sdk/llm"
 	"github.com/shepard-labs/go-ai-sdk/openaicompatible"
 )
 
@@ -88,7 +91,7 @@ func TestOpenAICompatibleResultAndUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate error = %v", err)
 	}
-	if result.FinishReason != FinishReasonToolCalls {
+	if result.FinishReason.Unified != FinishReasonToolCalls {
 		t.Fatalf("finish = %q", result.FinishReason)
 	}
 	if len(result.Content) != 2 {
@@ -122,6 +125,46 @@ func TestOpenAICompatibleUnknownRoleErrors(t *testing.T) {
 	_, err := NewOpenAICompatibleAdapter(&fakeOpenAICompatibleModel{}).Generate(context.Background(), GenerateOptions{Messages: []Message{{Role: "system"}}})
 	if err == nil {
 		t.Fatal("Generate error = nil, want unknown role error")
+	}
+}
+
+func TestOpenAICompatibleNewFieldsWiring(t *testing.T) {
+	ts := time.Now()
+	model := &fakeOpenAICompatibleModel{result: &openaicompatible.GenerateResult{
+		FinishReason: openaicompatible.FinishReason{Unified: "stop"},
+		Warnings:     []openaicompatible.Warning{{Type: "x", Message: "warn"}},
+		Response:     openaicompatible.ResponseMetadata{ID: "resp_1", ModelID: "m1", Timestamp: &ts, Headers: http.Header{"X-Req": []string{"abc"}}},
+	}}
+	schema := json.RawMessage(`{"type":"object"}`)
+	result, err := NewOpenAICompatibleAdapter(model).Generate(context.Background(), GenerateOptions{
+		ToolChoice:      ToolChoice{Type: llm.ToolChoiceRequired},
+		ResponseFormat:  &ResponseFormat{Type: llm.ResponseFormatJSONSchema, Name: "out", JSONSchema: schema},
+		ProviderOptions: llm.ProviderOptions{"openaicompatible": {"k": "v"}},
+		Headers:         map[string]string{"X-Test": "1"},
+	})
+	if err != nil {
+		t.Fatalf("Generate error = %v", err)
+	}
+	if model.lastOptions.ToolChoice == nil || model.lastOptions.ToolChoice.Type != "required" {
+		t.Fatalf("tool choice = %#v", model.lastOptions.ToolChoice)
+	}
+	if model.lastOptions.ResponseFormat == nil || model.lastOptions.ResponseFormat.Type != "json" || model.lastOptions.ResponseFormat.Name != "out" {
+		t.Fatalf("response format = %#v", model.lastOptions.ResponseFormat)
+	}
+	if model.lastOptions.ResponseFormat.Schema == nil {
+		t.Fatalf("response format schema not forwarded")
+	}
+	if model.lastOptions.ProviderOptions["openaicompatible"]["k"] != "v" {
+		t.Fatalf("provider options = %#v", model.lastOptions.ProviderOptions)
+	}
+	if model.lastOptions.Headers.Get("X-Test") != "1" {
+		t.Fatalf("headers = %#v", model.lastOptions.Headers)
+	}
+	if result.Response.ID != "resp_1" || result.Response.ModelID != "m1" || result.Response.Headers["X-Req"] != "abc" {
+		t.Fatalf("response metadata = %#v", result.Response)
+	}
+	if len(result.Warnings) == 0 || result.Warnings[len(result.Warnings)-1].Message != "warn" {
+		t.Fatalf("warnings = %#v", result.Warnings)
 	}
 }
 

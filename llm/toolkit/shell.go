@@ -16,15 +16,25 @@ import (
 // defaultShellTimeout caps a single command's run time.
 const defaultShellTimeout = 30 * time.Second
 
+// defaultMaxOutputBytes caps combined stdout+stderr captured per command.
+const defaultMaxOutputBytes = 1 << 20
+
 // ShellConfig configures the Shell toolkit.
 type ShellConfig struct {
 	// Cwd is the working directory for commands.
 	Cwd string
 	// AllowedCmds, if non-empty, is the allowlist of base command names that may
 	// be run (e.g. "ls", "cat"). An empty list permits any command.
+	//
+	// Production deployments should always set AllowedCmds. An empty AllowedCmds
+	// list allows all commands.
 	AllowedCmds []string
 	// Timeout bounds each command's run time. Defaults to 30s when zero.
 	Timeout time.Duration
+	// MaxOutputBytes caps the bytes captured from each of stdout and stderr.
+	// Output beyond the limit is truncated with a notice. Defaults to 1 MiB
+	// when zero.
+	MaxOutputBytes int
 }
 
 // shellToolkit runs shell commands.
@@ -35,10 +45,11 @@ type ShellConfig struct {
 // kills the process when the deadline elapses. Arguments are passed directly to
 // exec (no shell interpretation), so shell metacharacters are not expanded.
 type shellToolkit struct {
-	cwd     string
-	allowed map[string]bool
-	timeout time.Duration
-	tools   []llm.Tool
+	cwd            string
+	allowed        map[string]bool
+	timeout        time.Duration
+	maxOutputBytes int
+	tools          []llm.Tool
 }
 
 type runCommandInput struct {
@@ -52,6 +63,10 @@ func Shell(config ShellConfig) Toolkit {
 	if timeout <= 0 {
 		timeout = defaultShellTimeout
 	}
+	maxOutput := config.MaxOutputBytes
+	if maxOutput <= 0 {
+		maxOutput = defaultMaxOutputBytes
+	}
 	var allowed map[string]bool
 	if len(config.AllowedCmds) > 0 {
 		allowed = make(map[string]bool, len(config.AllowedCmds))
@@ -59,7 +74,7 @@ func Shell(config ShellConfig) Toolkit {
 			allowed[cmd] = true
 		}
 	}
-	tk := &shellToolkit{cwd: config.Cwd, allowed: allowed, timeout: timeout}
+	tk := &shellToolkit{cwd: config.Cwd, allowed: allowed, timeout: timeout, maxOutputBytes: maxOutput}
 	tk.tools = mustTools(
 		schemaTool("run_command", "Run a shell command and return its stdout, stderr, and exit code.", runCommandInput{}),
 	)
@@ -93,6 +108,8 @@ func (t *shellToolkit) Dispatch(ctx context.Context, name string, input json.Raw
 	cmd.Stderr = &stderr
 
 	runErr := cmd.Run()
+	outStr, outTrunc := t.truncate(stdout.String())
+	errStr, errTrunc := t.truncate(stderr.String())
 	exitCode := 0
 	var exitErr *exec.ExitError
 	if errors.As(runErr, &exitErr) {
@@ -100,17 +117,28 @@ func (t *shellToolkit) Dispatch(ctx context.Context, name string, input json.Raw
 	} else if runErr != nil {
 		// Command could not be started (not found, timeout, etc.).
 		return jsonResult(map[string]any{
-			"stdout":    stdout.String(),
-			"stderr":    stderr.String(),
+			"stdout":    outStr,
+			"stderr":    errStr,
 			"exit_code": -1,
+			"truncated": outTrunc || errTrunc,
 			"error":     runErr.Error(),
 		})
 	}
 	return jsonResult(map[string]any{
-		"stdout":    stdout.String(),
-		"stderr":    stderr.String(),
+		"stdout":    outStr,
+		"stderr":    errStr,
 		"exit_code": exitCode,
+		"truncated": outTrunc || errTrunc,
 	})
+}
+
+// truncate caps s at maxOutputBytes, appending a notice when it overflows.
+// It returns the (possibly truncated) string and whether truncation occurred.
+func (t *shellToolkit) truncate(s string) (string, bool) {
+	if len(s) <= t.maxOutputBytes {
+		return s, false
+	}
+	return s[:t.maxOutputBytes] + "\n[output truncated]", true
 }
 
 // ---- Git ----

@@ -8,8 +8,8 @@ import (
 
 func TestREQCACHE001_KeyIncludesToolsChangeBustsCache(t *testing.T) {
 	underlying := &mockClient{results: []*GenerateResult{
-		{Content: []Content{TextContent{Text: "first"}}, FinishReason: FinishReasonStop},
-		{Content: []Content{TextContent{Text: "second"}}, FinishReason: FinishReasonStop},
+		{Content: []Content{TextContent{Text: "first"}}, FinishReason: FinishReason{Unified: FinishReasonStop}},
+		{Content: []Content{TextContent{Text: "second"}}, FinishReason: FinishReason{Unified: FinishReasonStop}},
 	}}
 	client := WithCache(underlying, newMemoryCache())
 	base := GenerateOptions{System: "system", Messages: []Message{{Role: "user", Content: []Content{TextContent{Text: "hello"}}}}}
@@ -34,7 +34,7 @@ func TestREQCACHE001_KeyIncludesToolsChangeBustsCache(t *testing.T) {
 
 func TestREQCACHE002_ErrorsNeverCached(t *testing.T) {
 	wantErr := errors.New("transient")
-	wantResult := &GenerateResult{FinishReason: FinishReasonStop}
+	wantResult := &GenerateResult{FinishReason: FinishReason{Unified: FinishReasonStop}}
 	underlying := &mockClient{errors: []error{wantErr, nil}, results: []*GenerateResult{nil, wantResult}}
 	cache := newMemoryCache()
 	client := WithCache(underlying, cache)
@@ -69,7 +69,7 @@ func TestREQCACHE003_NoBuiltInBackend(t *testing.T) {
 }
 
 func TestREQCACHE005_ReturnsSamePointerReadOnly(t *testing.T) {
-	want := &GenerateResult{FinishReason: FinishReasonStop}
+	want := &GenerateResult{FinishReason: FinishReason{Unified: FinishReasonStop}}
 	underlying := &mockClient{results: []*GenerateResult{want}}
 	client := WithCache(underlying, newMemoryCache())
 

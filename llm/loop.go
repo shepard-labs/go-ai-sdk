@@ -109,7 +109,7 @@ func AgentLoopResultWithOptions(ctx context.Context, client Client, opts Generat
 		messages = append(messages, assistant)
 
 		toolCalls := toolUseContents(result.Content)
-		if len(toolCalls) > 0 && (result.FinishReason == FinishReasonToolCalls || hasTerminalToolCall(toolCalls, policies)) {
+		if len(toolCalls) > 0 && (result.FinishReason.Unified == FinishReasonToolCalls || hasTerminalToolCall(toolCalls, policies)) {
 			processed, err := processToolCalls(ctx, dispatcher, toolCalls, policies, loopOpts, &repairs)
 			if err != nil {
 				return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, err
@@ -124,7 +124,7 @@ func AgentLoopResultWithOptions(ctx context.Context, client Client, opts Generat
 			}
 		}
 
-		switch result.FinishReason {
+		switch result.FinishReason.Unified {
 		case FinishReasonToolCalls:
 			continue
 		case FinishReasonStop:
@@ -137,7 +137,7 @@ func AgentLoopResultWithOptions(ctx context.Context, client Client, opts Generat
 		case FinishReasonError:
 			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, fmt.Errorf("llm: finish reason %s", FinishReasonError)
 		default:
-			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, fmt.Errorf("llm: finish reason %s", result.FinishReason)
+			return AgentLoopResult{Messages: messages, Turns: turns, Repairs: repairs, LastUsage: lastUsage}, fmt.Errorf("llm: finish reason %s", result.FinishReason.Unified)
 		}
 	}
 }

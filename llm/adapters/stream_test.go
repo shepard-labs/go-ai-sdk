@@ -71,7 +71,7 @@ func TestAnthropicAdapterStreamMapping(t *testing.T) {
 		StreamToolInputDelta{ID: "t1", JSON: `{"q":"`},
 		StreamToolInputDelta{ID: "t1", JSON: `go"}`},
 		StreamToolInputEnd{ID: "t1"},
-		StreamFinish{FinishReason: FinishReasonStop, Usage: Usage{InputTokens: 7, OutputTokens: 11}},
+		StreamFinish{FinishReason: FinishReason{Unified: FinishReasonStop, Raw: "stop"}, Usage: Usage{InputTokens: 7, OutputTokens: 11}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("stream parts =\n%#v\nwant\n%#v", got, want)
@@ -154,7 +154,7 @@ func TestOpenAIAdapterStreamMapping(t *testing.T) {
 		StreamToolCallStart{ID: "c1", Name: "run"},
 		StreamToolInputDelta{ID: "c1", JSON: `{"x":1}`},
 		StreamToolInputEnd{ID: "c1"},
-		StreamFinish{FinishReason: FinishReasonToolCalls, Usage: Usage{InputTokens: 3, OutputTokens: 4}},
+		StreamFinish{FinishReason: FinishReason{Unified: FinishReasonToolCalls, Raw: "tool-calls"}, Usage: Usage{InputTokens: 3, OutputTokens: 4}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("stream parts =\n%#v\nwant\n%#v", got, want)
@@ -232,7 +232,7 @@ func TestGoogleAdapterStreamMapping(t *testing.T) {
 		StreamToolCallStart{ID: "g1", Name: "ls"},
 		StreamToolInputDelta{ID: "g1", JSON: `{"path":"/"`},
 		StreamToolInputEnd{ID: "g1"},
-		StreamFinish{FinishReason: FinishReasonStop, Usage: Usage{InputTokens: 8, OutputTokens: 9}},
+		StreamFinish{FinishReason: FinishReason{Unified: FinishReasonStop, Raw: "stop"}, Usage: Usage{InputTokens: 8, OutputTokens: 9}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("stream parts =\n%#v\nwant\n%#v", got, want)
@@ -277,7 +277,7 @@ func TestOpenRouterAdapterStreamMapping(t *testing.T) {
 		StreamToolCallStart{ID: "c", Name: "run"},
 		StreamToolInputDelta{ID: "c", JSON: `{"x":1}`},
 		StreamToolInputEnd{ID: "c"},
-		StreamFinish{FinishReason: FinishReasonToolCalls, Usage: Usage{InputTokens: 3, OutputTokens: 4}},
+		StreamFinish{FinishReason: FinishReason{Unified: FinishReasonToolCalls, Raw: "tool-calls"}, Usage: Usage{InputTokens: 3, OutputTokens: 4}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("stream parts =\n%#v\nwant\n%#v", got, want)
@@ -315,7 +315,7 @@ func TestOpenAICompatibleAdapterStreamMapping(t *testing.T) {
 		StreamToolCallStart{ID: "c", Name: "run"},
 		StreamToolInputDelta{ID: "c", JSON: `{"x":1}`},
 		StreamToolInputEnd{ID: "c"},
-		StreamFinish{FinishReason: FinishReasonStop, Usage: Usage{InputTokens: 8, OutputTokens: 9}},
+		StreamFinish{FinishReason: FinishReason{Unified: FinishReasonStop, Raw: "stop"}, Usage: Usage{InputTokens: 8, OutputTokens: 9}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("stream parts =\n%#v\nwant\n%#v", got, want)
