@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -237,18 +238,42 @@ func TestAnthropicNeutralReasoningMapsToThinking(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			model := &fakeAnthropicModel{result: &anthropic.GenerateResult{FinishReason: anthropic.FinishReasonStop}}
-			_, err := NewAnthropicAdapter(model).Generate(context.Background(), GenerateOptions{Reasoning: tc.reasoning})
+			result, err := NewAnthropicAdapter(model).Generate(context.Background(), GenerateOptions{
+				Reasoning:                tc.reasoning,
+				UnsupportedFeaturePolicy: llm.UnsupportedFeaturePolicyWarn,
+			})
 			if err != nil {
 				t.Fatalf("Generate error = %v", err)
 			}
-			if model.lastOptions.Thinking == nil {
+			thinking := anthropicThinkingFromOptions(model.lastOptions)
+			if thinking == nil && !anthropicGenerateOptionsHasThinking() {
+				if len(result.Warnings) == 0 || result.Warnings[0].Provider != "anthropic" || result.Warnings[0].Code != "unsupported_feature" {
+					t.Fatalf("warnings = %#v, want unsupported Anthropic reasoning warning", result.Warnings)
+				}
+				return
+			}
+			if thinking == nil {
 				t.Fatal("Thinking = nil")
 			}
-			if model.lastOptions.Thinking.Type != tc.wantType || model.lastOptions.Thinking.BudgetTokens != tc.wantBudget {
-				t.Fatalf("Thinking = %#v, want type %q budget %d", model.lastOptions.Thinking, tc.wantType, tc.wantBudget)
+			if thinking.Type != tc.wantType || thinking.BudgetTokens != tc.wantBudget {
+				t.Fatalf("Thinking = %#v, want type %q budget %d", thinking, tc.wantType, tc.wantBudget)
 			}
 		})
 	}
+}
+
+func anthropicGenerateOptionsHasThinking() bool {
+	_, ok := reflect.TypeOf(anthropic.GenerateOptions{}).FieldByName("Thinking")
+	return ok
+}
+
+func anthropicThinkingFromOptions(opts anthropic.GenerateOptions) *anthropic.ThinkingConfig {
+	field := reflect.ValueOf(opts).FieldByName("Thinking")
+	if !field.IsValid() || field.IsNil() {
+		return nil
+	}
+	thinking, _ := field.Interface().(*anthropic.ThinkingConfig)
+	return thinking
 }
 
 func TestAnthropicNeutralReasoningValidation(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"reflect"
 
 	anthropicsdk "github.com/shepard-labs/go-ai-sdk/anthropic"
 	"github.com/shepard-labs/go-ai-sdk/llm"
@@ -223,7 +224,11 @@ func toAnthropicOptions(opts GenerateOptions) (anthropicsdk.GenerateOptions, []W
 		if err != nil {
 			return anthropicsdk.GenerateOptions{}, nil, err
 		}
-		sdkOpts.Thinking = thinking
+		if thinking != nil && !setAnthropicThinking(&sdkOpts, thinking) {
+			if err := unsupportedFeature(opts.UnsupportedFeaturePolicy, "anthropic", "reasoning", "per-request thinking requires a newer Anthropic SDK dependency", &warnings); err != nil {
+				return anthropicsdk.GenerateOptions{}, nil, err
+			}
+		}
 	}
 
 	if choice, err := toAnthropicToolChoice(opts.ToolChoice, opts.UnsupportedFeaturePolicy, &warnings); err != nil {
@@ -253,6 +258,18 @@ func toAnthropicOptions(opts GenerateOptions) (anthropicsdk.GenerateOptions, []W
 	}
 
 	return sdkOpts, warnings, nil
+}
+
+func setAnthropicThinking(opts *anthropicsdk.GenerateOptions, thinking *anthropicsdk.ThinkingConfig) bool {
+	if opts == nil || thinking == nil {
+		return false
+	}
+	field := reflect.ValueOf(opts).Elem().FieldByName("Thinking")
+	if !field.IsValid() || !field.CanSet() || field.Type() != reflect.TypeOf(thinking) {
+		return false
+	}
+	field.Set(reflect.ValueOf(thinking))
+	return true
 }
 
 func anthropicThinkingFromReasoning(reasoning *llm.ReasoningOptions) (*anthropicsdk.ThinkingConfig, error) {
