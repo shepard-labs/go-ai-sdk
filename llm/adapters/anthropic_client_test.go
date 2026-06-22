@@ -45,20 +45,29 @@ func TestREQADAPTER001_GoAISDKImportOnlyInAdapter(t *testing.T) {
 }
 
 type fakeAnthropicModel struct {
-	lastOptions anthropic.GenerateOptions
-	result      *anthropic.GenerateResult
-	err         error
+	modelID       string
+	generateCalls int
+	lastOptions   anthropic.GenerateOptions
+	result        *anthropic.GenerateResult
+	stream        *anthropic.StreamResult
+	err           error
 }
 
-func (f *fakeAnthropicModel) ModelID() string                          { return "fake" }
+func (f *fakeAnthropicModel) ModelID() string {
+	if f.modelID != "" {
+		return f.modelID
+	}
+	return "fake"
+}
 func (f *fakeAnthropicModel) Provider() string                         { return "fake" }
 func (f *fakeAnthropicModel) SupportURLs() map[string][]*regexp.Regexp { return nil }
 func (f *fakeAnthropicModel) DoGenerate(ctx context.Context, opts anthropic.GenerateOptions) (*anthropic.GenerateResult, error) {
+	f.generateCalls++
 	f.lastOptions = opts
 	return f.result, f.err
 }
 func (f *fakeAnthropicModel) DoStream(ctx context.Context, opts anthropic.StreamOptions) (*anthropic.StreamResult, error) {
-	return nil, nil
+	return f.stream, f.err
 }
 
 func TestREQADAPTER002_APICallError429529Unwrapped(t *testing.T) {

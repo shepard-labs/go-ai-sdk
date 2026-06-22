@@ -97,6 +97,28 @@ func unsupportedFeature(policy llm.UnsupportedFeaturePolicy, provider, feature, 
 	return &llm.UnsupportedFeatureError{Provider: provider, Feature: feature, Message: msg}
 }
 
+func modelOverrideError(provider string) error {
+	return &llm.UnsupportedFeatureError{
+		Provider: provider,
+		Feature:  "model_id",
+		Message:  "per-request model override requires a factory-backed adapter",
+	}
+}
+
+func capabilitiesWithModelID(capabilities llm.Capabilities, modelID string) llm.Capabilities {
+	capabilities.ModelID = modelID
+	return capabilities
+}
+
+func fillStreamMetadataModelID(part llm.StreamPart, modelID string) llm.StreamPart {
+	metadata, ok := part.(llm.StreamMetadata)
+	if !ok || metadata.Response.ModelID != "" {
+		return part
+	}
+	metadata.Response.ModelID = modelID
+	return metadata
+}
+
 func reasoningFeature(policy llm.UnsupportedFeaturePolicy, provider, code, feature, msg string, warnings *[]llm.Warning) error {
 	if policy == llm.UnsupportedFeaturePolicyWarn {
 		*warnings = append(*warnings, llm.Warning{Code: code, Message: fmt.Sprintf("%s: %s", feature, msg), Provider: provider})

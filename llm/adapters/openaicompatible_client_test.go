@@ -13,20 +13,29 @@ import (
 )
 
 type fakeOpenAICompatibleModel struct {
-	lastOptions openaicompatible.GenerateOptions
-	result      *openaicompatible.GenerateResult
-	err         error
+	modelID       string
+	generateCalls int
+	lastOptions   openaicompatible.GenerateOptions
+	result        *openaicompatible.GenerateResult
+	stream        *openaicompatible.StreamResult
+	err           error
 }
 
-func (f *fakeOpenAICompatibleModel) ModelID() string                          { return "fake" }
+func (f *fakeOpenAICompatibleModel) ModelID() string {
+	if f.modelID != "" {
+		return f.modelID
+	}
+	return "fake"
+}
 func (f *fakeOpenAICompatibleModel) Provider() string                         { return "fake" }
 func (f *fakeOpenAICompatibleModel) SupportURLs() map[string][]*regexp.Regexp { return nil }
 func (f *fakeOpenAICompatibleModel) DoGenerate(ctx context.Context, opts openaicompatible.GenerateOptions) (*openaicompatible.GenerateResult, error) {
+	f.generateCalls++
 	f.lastOptions = opts
 	return f.result, f.err
 }
 func (f *fakeOpenAICompatibleModel) DoStream(ctx context.Context, opts openaicompatible.StreamOptions) (*openaicompatible.StreamResult, error) {
-	return nil, nil
+	return f.stream, f.err
 }
 
 func intPtr(v int) *int { return &v }

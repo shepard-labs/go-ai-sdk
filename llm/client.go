@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -132,6 +133,12 @@ func (StreamWarning) isStreamPart() {}
 
 // GenerateOptions contains the prompt, tools, and limits for one generation call.
 type GenerateOptions struct {
+	// ModelID optionally overrides the client default model for this request.
+	// It is provider-local, e.g. "gpt-4o", "claude-haiku-4-5", or
+	// "llama3.1:8b". Empty uses the client default. It is not a registry
+	// selector like "openai:gpt-4o".
+	ModelID string
+
 	System    string
 	Messages  []Message
 	Tools     []Tool
@@ -411,6 +418,31 @@ type CapabilitiesProvider interface {
 	Capabilities() Capabilities
 }
 
+// ModelCapabilities is an optional interface implemented by adapters that can
+// report best-known capabilities for a specific provider-local model ID.
+type ModelCapabilities interface {
+	CapabilitiesForModel(modelID string) Capabilities
+}
+
+// Identity identifies a client's effective provider-local model endpoint.
+type Identity struct {
+	Provider string
+	ModelID  string
+}
+
+// IdentifiedClient is implemented by clients that can report their default
+// provider/model identity.
+type IdentifiedClient interface {
+	Client
+	Identity() Identity
+}
+
+// RequestIdentityProvider is implemented by clients and wrappers that can
+// report the effective provider/model identity for a request.
+type RequestIdentityProvider interface {
+	RequestIdentity(opts GenerateOptions) (Identity, error)
+}
+
 // Middleware wraps a Client to add cross-cutting behavior.
 // Middlewares compose left-to-right: the first middleware in a chain
 // is the outermost wrapper.
@@ -438,6 +470,9 @@ type FailoverConfig struct {
 	// RetryDelay is an optional fixed delay between failover attempts.
 	// Zero means no delay.
 	RetryDelay time.Duration
+	// RewriteOptions can map provider-local request options before each attempt.
+	// The attempt is zero for the primary client and one-based for failover hops.
+	RewriteOptions func(attempt int, opts GenerateOptions) GenerateOptions
 }
 
 // WithFailover wraps a client with failover-on-provider-failure behavior.
@@ -467,7 +502,11 @@ func (c failoverClient) Generate(ctx context.Context, opts GenerateOptions) (*Ge
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		result, err := client.Generate(ctx, opts)
+		attemptOpts := opts
+		if c.cfg.RewriteOptions != nil {
+			attemptOpts = c.cfg.RewriteOptions(attempt, opts)
+		}
+		result, err := client.Generate(ctx, attemptOpts)
 		if err == nil {
 			return result, nil
 		}
@@ -505,7 +544,11 @@ func (c failoverClient) Stream(ctx context.Context, opts GenerateOptions) (<-cha
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		ch, err := client.Stream(ctx, opts)
+		attemptOpts := opts
+		if c.cfg.RewriteOptions != nil {
+			attemptOpts = c.cfg.RewriteOptions(attempt, opts)
+		}
+		ch, err := client.Stream(ctx, attemptOpts)
 		if err == nil {
 			return ch, nil
 		}
@@ -531,6 +574,14 @@ func (c failoverClient) Stream(ctx context.Context, opts GenerateOptions) (<-cha
 		client = c.cfg.GetNext(attempt)
 	}
 	return nil, lastErr
+}
+
+func (c failoverClient) RequestIdentity(opts GenerateOptions) (Identity, error) {
+	attemptOpts := opts
+	if c.cfg.RewriteOptions != nil {
+		attemptOpts = c.cfg.RewriteOptions(0, opts)
+	}
+	return clientIdentity(c.client, attemptOpts)
 }
 
 // sleepCtx sleeps for d or until ctx is cancelled, whichever comes first.
@@ -566,7 +617,11 @@ type cacheClient struct {
 }
 
 func (c cacheClient) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
-	key, err := cacheKey(opts)
+	identity, err := clientIdentity(c.client, opts)
+	if err != nil {
+		return nil, err
+	}
+	key, err := cacheKey(identity, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -589,10 +644,34 @@ func (c cacheClient) Stream(ctx context.Context, opts GenerateOptions) (<-chan S
 	return c.client.Stream(ctx, opts)
 }
 
+func (c cacheClient) Identity() Identity {
+	if p, ok := c.client.(IdentifiedClient); ok {
+		return p.Identity()
+	}
+	return Identity{}
+}
+
+func (c cacheClient) RequestIdentity(opts GenerateOptions) (Identity, error) {
+	return clientIdentity(c.client, opts)
+}
+
+func clientIdentity(client Client, opts GenerateOptions) (Identity, error) {
+	if err := ValidateModelID(opts.ModelID); err != nil {
+		return Identity{}, err
+	}
+	if p, ok := client.(RequestIdentityProvider); ok {
+		return p.RequestIdentity(opts)
+	}
+	if p, ok := client.(IdentifiedClient); ok {
+		return p.Identity(), nil
+	}
+	return Identity{}, nil
+}
+
 // cacheKey produces a deterministic SHA-256 hash of GenerateOptions.
 // Maps in GenerateOptions (Headers, Metadata, ProviderOptions) are sorted
 // before serialization to ensure a stable key regardless of insertion order.
-func cacheKey(opts GenerateOptions) (string, error) {
+func cacheKey(identity Identity, opts GenerateOptions) (string, error) {
 	// Use a canonical intermediate representation to handle maps deterministically.
 	type canonicalProviderOptions struct {
 		Provider string            `json:"provider"`
@@ -600,6 +679,8 @@ func cacheKey(opts GenerateOptions) (string, error) {
 		Values   map[string]string `json:"values"`
 	}
 	type canonicalOpts struct {
+		Provider        string                     `json:"provider,omitempty"`
+		ModelID         string                     `json:"model_id,omitempty"`
 		System          string                     `json:"system,omitempty"`
 		Messages        any                        `json:"messages,omitempty"`
 		Tools           any                        `json:"tools,omitempty"`
@@ -619,6 +700,8 @@ func cacheKey(opts GenerateOptions) (string, error) {
 	}
 
 	co := canonicalOpts{
+		Provider:       identity.Provider,
+		ModelID:        identity.ModelID,
 		System:         opts.System,
 		Messages:       opts.Messages,
 		Tools:          opts.Tools,
@@ -683,4 +766,16 @@ func cacheKey(opts GenerateOptions) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// ValidateModelID validates provider-neutral model ID syntax. It does not check
+// provider-specific model existence.
+func ValidateModelID(modelID string) error {
+	if modelID == "" {
+		return nil
+	}
+	if strings.TrimSpace(modelID) != modelID {
+		return fmt.Errorf("model_id: ModelID must not contain leading or trailing whitespace")
+	}
+	return nil
 }

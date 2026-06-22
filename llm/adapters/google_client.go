@@ -12,7 +12,9 @@ import (
 
 // GoogleAdapter adapts a Google Gemini language model to the Client interface.
 type GoogleAdapter struct {
-	model googlesdk.LanguageModel
+	model          googlesdk.LanguageModel
+	defaultModelID string
+	newModel       func(modelID string) googlesdk.LanguageModel
 }
 
 // GoogleSettings configures a Google Client.
@@ -24,7 +26,7 @@ type GoogleSettings struct {
 
 // NewGoogleAdapter wraps an existing Google language model as a Client.
 func NewGoogleAdapter(model googlesdk.LanguageModel) Client {
-	return &GoogleAdapter{model: model}
+	return &GoogleAdapter{model: model, defaultModelID: model.ModelID()}
 }
 
 // NewGoogleClient creates a Google-backed Client from an API key and model ID.
@@ -43,12 +45,23 @@ func NewGoogleClientWithSettings(settings GoogleSettings, modelID string) (Clien
 	if err := provider.Err(); err != nil {
 		return nil, err
 	}
-	return NewGoogleAdapter(provider.LanguageModel(modelID)), nil
+	return &GoogleAdapter{
+		model:          provider.LanguageModel(modelID),
+		defaultModelID: modelID,
+		newModel:       provider.LanguageModel,
+	}, nil
 }
 
 // Capabilities reports the feature set supported by the Google adapter.
 func (a *GoogleAdapter) Capabilities() Capabilities {
-	return Capabilities{
+	return a.CapabilitiesForModel(a.defaultModelID)
+}
+
+func (a *GoogleAdapter) CapabilitiesForModel(modelID string) Capabilities {
+	if modelID == "" {
+		modelID = a.defaultModelID
+	}
+	return capabilitiesWithModelID(Capabilities{
 		Provider:           "google",
 		Streaming:          true,
 		ToolCalling:        true,
@@ -62,20 +75,63 @@ func (a *GoogleAdapter) Capabilities() Capabilities {
 		Reasoning:          true,
 		ParallelToolCalls:  true,
 		PromptCaching:      false,
+	}, modelID)
+}
+
+func (a *GoogleAdapter) Identity() Identity {
+	return Identity{Provider: "google", ModelID: a.defaultModelID}
+}
+
+func (a *GoogleAdapter) RequestIdentity(opts GenerateOptions) (Identity, error) {
+	modelID, err := a.effectiveModelID(opts)
+	if err != nil {
+		return Identity{}, err
 	}
+	return Identity{Provider: "google", ModelID: modelID}, nil
+}
+
+func (a *GoogleAdapter) effectiveModelID(opts GenerateOptions) (string, error) {
+	if err := llm.ValidateModelID(opts.ModelID); err != nil {
+		return "", err
+	}
+	if opts.ModelID == "" {
+		return a.defaultModelID, nil
+	}
+	return opts.ModelID, nil
+}
+
+func (a *GoogleAdapter) modelForOptions(opts GenerateOptions) (googlesdk.LanguageModel, string, error) {
+	modelID, err := a.effectiveModelID(opts)
+	if err != nil {
+		return nil, "", err
+	}
+	if modelID == a.defaultModelID {
+		return a.model, modelID, nil
+	}
+	if a.newModel == nil {
+		return nil, "", modelOverrideError("google")
+	}
+	return a.newModel(modelID), modelID, nil
 }
 
 // Generate sends a completion request through the Google SDK.
 func (a *GoogleAdapter) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
+	model, effectiveModelID, err := a.modelForOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	sdkOpts, warnings, err := toGoogleOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.model.DoGenerate(ctx, sdkOpts)
+	result, err := model.DoGenerate(ctx, sdkOpts)
 	if err != nil {
 		return nil, err
 	}
 	out := fromGoogleResult(result)
+	if out != nil && out.Response.ModelID == "" {
+		out.Response.ModelID = effectiveModelID
+	}
 	if out != nil && len(warnings) > 0 {
 		out.Warnings = append(warnings, out.Warnings...)
 	}
@@ -86,11 +142,15 @@ func (a *GoogleAdapter) Generate(ctx context.Context, opts GenerateOptions) (*Ge
 // provider-native StreamPart values into the neutral StreamPart union.
 // spec §1.1
 func (a *GoogleAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
+	model, effectiveModelID, err := a.modelForOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	sdkOpts, _, err := toGoogleOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.model.DoStream(ctx, googlesdk.StreamOptions{GenerateOptions: sdkOpts})
+	result, err := model.DoStream(ctx, googlesdk.StreamOptions{GenerateOptions: sdkOpts})
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +171,7 @@ func (a *GoogleAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-cha
 					return
 				}
 				for _, mapped := range mapGoogleStreamPart(part) {
-					out <- mapped
+					out <- fillStreamMetadataModelID(mapped, effectiveModelID)
 				}
 			}
 		}

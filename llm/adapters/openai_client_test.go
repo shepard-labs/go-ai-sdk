@@ -14,9 +14,12 @@ import (
 )
 
 type fakeOpenAIModel struct {
-	lastOptions openai.GenerateOptions
-	result      *openai.GenerateResult
-	err         error
+	modelID       string
+	generateCalls int
+	lastOptions   openai.GenerateOptions
+	result        *openai.GenerateResult
+	stream        *openai.StreamResult
+	err           error
 }
 
 func TestOpenAIAdapterNeutralReasoningMapsToProviderOptions(t *testing.T) {
@@ -69,15 +72,21 @@ func TestOpenAIAdapterNeutralReasoningXHighWarnDowngrades(t *testing.T) {
 	}
 }
 
-func (f *fakeOpenAIModel) ModelID() string                          { return "fake" }
+func (f *fakeOpenAIModel) ModelID() string {
+	if f.modelID != "" {
+		return f.modelID
+	}
+	return "fake"
+}
 func (f *fakeOpenAIModel) Provider() string                         { return "fake" }
 func (f *fakeOpenAIModel) SupportURLs() map[string][]*regexp.Regexp { return nil }
 func (f *fakeOpenAIModel) DoGenerate(ctx context.Context, opts openai.GenerateOptions) (*openai.GenerateResult, error) {
+	f.generateCalls++
 	f.lastOptions = opts
 	return f.result, f.err
 }
 func (f *fakeOpenAIModel) DoStream(ctx context.Context, opts openai.StreamOptions) (*openai.StreamResult, error) {
-	return nil, nil
+	return f.stream, f.err
 }
 
 func TestOpenAIAdapterTranslatesAndReturns(t *testing.T) {

@@ -55,7 +55,7 @@ Provider adapters can be used directly from `llm/adapters`, or registered by bla
 
 The production-neutral `llm` contract targets Anthropic, OpenAI, OpenAI-compatible providers, Google, and OpenRouter. Cohere remains available as a native provider package and adapter, but it is not implemented in the production-neutral compatibility matrix yet.
 
-The neutral request API includes messages, tools, max tokens, sampling controls (`Temperature`, `TopP`, `TopK`), stop sequences, seed, tool choice, response format, per-request `Reasoning`, request headers, request metadata, provider options, and an unsupported-feature policy. Explicit unsupported options default to strict errors; set `UnsupportedFeaturePolicyWarn` when you want documented fallback behavior plus warnings.
+The neutral request API includes provider-local per-request `ModelID`, messages, tools, max tokens, sampling controls (`Temperature`, `TopP`, `TopK`), stop sequences, seed, tool choice, response format, per-request `Reasoning`, request headers, request metadata, provider options, and an unsupported-feature policy. Explicit unsupported options default to strict errors; set `UnsupportedFeaturePolicyWarn` when you want documented fallback behavior plus warnings.
 
 The neutral result API preserves content, structured finish reasons (`Unified` plus raw provider value), expanded usage, warnings, request metadata, response metadata, and provider metadata. Provider-specific escape hatches live under `ProviderOptions` keys such as `"anthropic"`, `"openai"`, `"google"`, or `"openrouter"`.
 
@@ -80,6 +80,17 @@ result, err := client.Generate(ctx, llm.GenerateOptions{
 ```
 
 `nil` reasoning preserves provider defaults. `ReasoningNone` explicitly disables reasoning where supported. Anthropic supports exact `BudgetTokens`; Google and OpenAI expose portable effort levels, while exact budgets remain provider-specific or unsupported.
+
+Per-request model selection lives on `llm.GenerateOptions.ModelID`:
+
+```go
+result, err := client.Generate(ctx, llm.GenerateOptions{
+    ModelID:  "claude-haiku-4-5",
+    Messages: messages,
+})
+```
+
+`ModelID` is provider-local. Empty means the construction-time client default. It is not a registry selector, so use `registry.NewClient("openai:gpt-4o", ...)` or a router/failover layer to change providers. Factory-backed clients created by adapter constructors or the registry can create same-provider sibling models per request. Direct wrappers around an existing provider model cannot switch models; requesting a different model returns `UnsupportedFeatureError` rather than silently using the wrong model. `WithCache` keys include the effective provider and effective model ID, so different default models and explicit model overrides do not collide. `Capabilities()` reports the default model; adapters also implement `CapabilitiesForModel(modelID)` for model-scoped best-known capabilities. For cross-provider failover, set `FailoverConfig.RewriteOptions` to map provider-local model IDs for fallback attempts.
 
 The neutral error model includes `UnsupportedFeatureError`, `APIError`, and helpers such as `IsRateLimit`, `IsAuth`, `IsInvalidRequest`, `IsUnsupported`, and `RetryAfter`. Middleware includes retry, failover, and cache wrappers; cache stores `Generate` results only and forwards `Stream` calls uncached.
 

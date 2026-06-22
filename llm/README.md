@@ -79,6 +79,7 @@ type Client interface {
 `GenerateOptions` is the portable request shape. It includes:
 
 - system prompt and message history
+- provider-local per-request `ModelID`
 - text, reasoning, tool-use, tool-result, and image content
 - function tools
 - max tokens
@@ -93,6 +94,40 @@ type Client interface {
 Explicit unsupported features use strict errors by default. Set
 `UnsupportedFeaturePolicyWarn` when an application wants the adapter to continue
 with a documented fallback and return a warning instead.
+
+## Per-request model ID
+
+Use `GenerateOptions.ModelID` to override the client default model for one
+request within the same provider:
+
+```go
+result, err := client.Generate(ctx, llm.GenerateOptions{
+    ModelID:  "claude-haiku-4-5",
+    Messages: messages,
+})
+```
+
+`ModelID` is provider-local. Empty means the construction-time default model. It
+is not a registry selector like `"openai:gpt-4o"`; provider selection stays in
+`registry.NewClient`, separate clients, or a higher-level router.
+
+Factory-backed clients created by `llm/adapters` constructors or by the registry
+can switch to same-provider sibling models per request. Direct wrappers such as
+`adapters.NewOpenAIAdapter(existingModel)` cannot create sibling models; a
+different requested `ModelID` returns `UnsupportedFeatureError` instead of
+silently using the wrapper's default model.
+
+`WithCache` includes the effective provider and effective model ID in its cache
+key. This prevents collisions between clients with different default models and
+between identical prompts using different explicit `ModelID` values.
+
+`Capabilities()` is scoped to the default model. Adapters also implement
+`CapabilitiesForModel(modelID)` for model-scoped best-known capabilities; empty
+`modelID` returns default-model capabilities.
+
+For cross-provider failover, remember that model IDs are provider-local. Use
+`FailoverConfig.RewriteOptions` to map request options before fallback attempts,
+for example mapping an Anthropic model ID to an OpenAI model ID.
 
 `GenerateResult` preserves:
 

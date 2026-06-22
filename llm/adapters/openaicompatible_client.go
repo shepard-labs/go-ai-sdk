@@ -13,7 +13,9 @@ import (
 // Client interface. It is used for self-hosted and OpenAI-API-compatible
 // endpoints such as Ollama and LM Studio via a custom BaseURL.
 type OpenAICompatibleAdapter struct {
-	model openaicompatiblesdk.LanguageModel
+	model          openaicompatiblesdk.LanguageModel
+	defaultModelID string
+	newModel       func(modelID string) openaicompatiblesdk.LanguageModel
 }
 
 // OpenAICompatibleSettings configures an OpenAI-compatible Client. Name and
@@ -27,7 +29,7 @@ type OpenAICompatibleSettings struct {
 
 // NewOpenAICompatibleAdapter wraps an existing OpenAI-compatible model as a Client.
 func NewOpenAICompatibleAdapter(model openaicompatiblesdk.LanguageModel) Client {
-	return &OpenAICompatibleAdapter{model: model}
+	return &OpenAICompatibleAdapter{model: model, defaultModelID: model.ModelID()}
 }
 
 // NewOpenAICompatibleClient creates an OpenAI-compatible Client from settings and a model ID.
@@ -44,7 +46,11 @@ func NewOpenAICompatibleClient(settings OpenAICompatibleSettings, modelID string
 	if err := provider.Err(); err != nil {
 		return nil, err
 	}
-	return NewOpenAICompatibleAdapter(provider.LanguageModel(modelID)), nil
+	return &OpenAICompatibleAdapter{
+		model:          provider.LanguageModel(modelID),
+		defaultModelID: modelID,
+		newModel:       provider.LanguageModel,
+	}, nil
 }
 
 // Capabilities reports the feature set supported by the OpenAI-compatible
@@ -53,7 +59,14 @@ func NewOpenAICompatibleClient(settings OpenAICompatibleSettings, modelID string
 // guarantee the endpoint honors them. Reasoning is reported false because the
 // generic OpenAI-compatible wire format does not standardize reasoning output.
 func (a *OpenAICompatibleAdapter) Capabilities() Capabilities {
-	return Capabilities{
+	return a.CapabilitiesForModel(a.defaultModelID)
+}
+
+func (a *OpenAICompatibleAdapter) CapabilitiesForModel(modelID string) Capabilities {
+	if modelID == "" {
+		modelID = a.defaultModelID
+	}
+	return capabilitiesWithModelID(Capabilities{
 		Provider:           "openaicompatible",
 		Streaming:          true,
 		ToolCalling:        true,
@@ -67,20 +80,63 @@ func (a *OpenAICompatibleAdapter) Capabilities() Capabilities {
 		Reasoning:          false,
 		ParallelToolCalls:  true,
 		PromptCaching:      false,
+	}, modelID)
+}
+
+func (a *OpenAICompatibleAdapter) Identity() Identity {
+	return Identity{Provider: "openaicompatible", ModelID: a.defaultModelID}
+}
+
+func (a *OpenAICompatibleAdapter) RequestIdentity(opts GenerateOptions) (Identity, error) {
+	modelID, err := a.effectiveModelID(opts)
+	if err != nil {
+		return Identity{}, err
 	}
+	return Identity{Provider: "openaicompatible", ModelID: modelID}, nil
+}
+
+func (a *OpenAICompatibleAdapter) effectiveModelID(opts GenerateOptions) (string, error) {
+	if err := llm.ValidateModelID(opts.ModelID); err != nil {
+		return "", err
+	}
+	if opts.ModelID == "" {
+		return a.defaultModelID, nil
+	}
+	return opts.ModelID, nil
+}
+
+func (a *OpenAICompatibleAdapter) modelForOptions(opts GenerateOptions) (openaicompatiblesdk.LanguageModel, string, error) {
+	modelID, err := a.effectiveModelID(opts)
+	if err != nil {
+		return nil, "", err
+	}
+	if modelID == a.defaultModelID {
+		return a.model, modelID, nil
+	}
+	if a.newModel == nil {
+		return nil, "", modelOverrideError("openaicompatible")
+	}
+	return a.newModel(modelID), modelID, nil
 }
 
 // Generate sends a completion request through the OpenAI-compatible SDK.
 func (a *OpenAICompatibleAdapter) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
+	model, effectiveModelID, err := a.modelForOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	sdkOpts, warnings, err := toOpenAICompatibleOptions(opts, false)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.model.DoGenerate(ctx, sdkOpts)
+	result, err := model.DoGenerate(ctx, sdkOpts)
 	if err != nil {
 		return nil, err
 	}
 	out := fromOpenAICompatibleResult(result)
+	if out != nil && out.Response.ModelID == "" {
+		out.Response.ModelID = effectiveModelID
+	}
 	if out != nil && len(warnings) > 0 {
 		out.Warnings = append(warnings, out.Warnings...)
 	}
@@ -91,11 +147,15 @@ func (a *OpenAICompatibleAdapter) Generate(ctx context.Context, opts GenerateOpt
 // SDK and maps provider-native StreamPart values into the neutral StreamPart
 // union. spec §1.1
 func (a *OpenAICompatibleAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
+	model, effectiveModelID, err := a.modelForOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	sdkOpts, _, err := toOpenAICompatibleOptions(opts, false)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.model.DoStream(ctx, openaicompatiblesdk.StreamOptions{GenerateOptions: sdkOpts})
+	result, err := model.DoStream(ctx, openaicompatiblesdk.StreamOptions{GenerateOptions: sdkOpts})
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +176,7 @@ func (a *OpenAICompatibleAdapter) Stream(ctx context.Context, opts GenerateOptio
 					return
 				}
 				for _, mapped := range mapOpenAICompatibleStreamPart(part) {
-					out <- mapped
+					out <- fillStreamMetadataModelID(mapped, effectiveModelID)
 				}
 			}
 		}

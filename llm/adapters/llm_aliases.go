@@ -7,6 +7,7 @@ type Capabilities = llm.Capabilities
 type Content = llm.Content
 type GenerateOptions = llm.GenerateOptions
 type GenerateResult = llm.GenerateResult
+type Identity = llm.Identity
 type FinishReason = llm.FinishReason
 type FinishReasonType = llm.FinishReasonType
 type ImageContent = llm.ImageContent

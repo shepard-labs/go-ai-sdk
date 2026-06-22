@@ -12,7 +12,9 @@ import (
 
 // OpenRouterAdapter adapts an OpenRouter language model to the Client interface.
 type OpenRouterAdapter struct {
-	model openroutersdk.LanguageModel
+	model          openroutersdk.LanguageModel
+	defaultModelID string
+	newModel       func(modelID string) openroutersdk.LanguageModel
 }
 
 // OpenRouterSettings configures an OpenRouter Client.
@@ -24,7 +26,7 @@ type OpenRouterSettings struct {
 
 // NewOpenRouterAdapter wraps an existing OpenRouter language model as a Client.
 func NewOpenRouterAdapter(model openroutersdk.LanguageModel) Client {
-	return &OpenRouterAdapter{model: model}
+	return &OpenRouterAdapter{model: model, defaultModelID: model.ModelID()}
 }
 
 // NewOpenRouterClient creates an OpenRouter-backed Client from an API key and model ID.
@@ -43,12 +45,25 @@ func NewOpenRouterClientWithSettings(settings OpenRouterSettings, modelID string
 	if err := provider.Err(); err != nil {
 		return nil, err
 	}
-	return NewOpenRouterAdapter(provider.LanguageModel(modelID)), nil
+	return &OpenRouterAdapter{
+		model:          provider.LanguageModel(modelID),
+		defaultModelID: modelID,
+		newModel: func(id string) openroutersdk.LanguageModel {
+			return provider.LanguageModel(id)
+		},
+	}, nil
 }
 
 // Capabilities reports the feature set supported by the OpenRouter adapter.
 func (a *OpenRouterAdapter) Capabilities() Capabilities {
-	return Capabilities{
+	return a.CapabilitiesForModel(a.defaultModelID)
+}
+
+func (a *OpenRouterAdapter) CapabilitiesForModel(modelID string) Capabilities {
+	if modelID == "" {
+		modelID = a.defaultModelID
+	}
+	return capabilitiesWithModelID(Capabilities{
 		Provider:           "openrouter",
 		Streaming:          true,
 		ToolCalling:        true,
@@ -62,20 +77,63 @@ func (a *OpenRouterAdapter) Capabilities() Capabilities {
 		Reasoning:          true,
 		ParallelToolCalls:  true,
 		PromptCaching:      false,
+	}, modelID)
+}
+
+func (a *OpenRouterAdapter) Identity() Identity {
+	return Identity{Provider: "openrouter", ModelID: a.defaultModelID}
+}
+
+func (a *OpenRouterAdapter) RequestIdentity(opts GenerateOptions) (Identity, error) {
+	modelID, err := a.effectiveModelID(opts)
+	if err != nil {
+		return Identity{}, err
 	}
+	return Identity{Provider: "openrouter", ModelID: modelID}, nil
+}
+
+func (a *OpenRouterAdapter) effectiveModelID(opts GenerateOptions) (string, error) {
+	if err := llm.ValidateModelID(opts.ModelID); err != nil {
+		return "", err
+	}
+	if opts.ModelID == "" {
+		return a.defaultModelID, nil
+	}
+	return opts.ModelID, nil
+}
+
+func (a *OpenRouterAdapter) modelForOptions(opts GenerateOptions) (openroutersdk.LanguageModel, string, error) {
+	modelID, err := a.effectiveModelID(opts)
+	if err != nil {
+		return nil, "", err
+	}
+	if modelID == a.defaultModelID {
+		return a.model, modelID, nil
+	}
+	if a.newModel == nil {
+		return nil, "", modelOverrideError("openrouter")
+	}
+	return a.newModel(modelID), modelID, nil
 }
 
 // Generate sends a completion request through the OpenRouter SDK.
 func (a *OpenRouterAdapter) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
+	model, effectiveModelID, err := a.modelForOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	sdkOpts, warnings, err := toOpenRouterOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.model.DoGenerate(ctx, sdkOpts)
+	result, err := model.DoGenerate(ctx, sdkOpts)
 	if err != nil {
 		return nil, err
 	}
 	out := fromOpenRouterResult(result)
+	if out != nil && out.Response.ModelID == "" {
+		out.Response.ModelID = effectiveModelID
+	}
 	if out != nil && len(warnings) > 0 {
 		out.Warnings = append(warnings, out.Warnings...)
 	}
@@ -86,11 +144,15 @@ func (a *OpenRouterAdapter) Generate(ctx context.Context, opts GenerateOptions) 
 // maps provider-native StreamPart values into the neutral StreamPart union.
 // spec §1.1
 func (a *OpenRouterAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
+	model, effectiveModelID, err := a.modelForOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	sdkOpts, _, err := toOpenRouterOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.model.DoStream(ctx, openroutersdk.StreamOptions{GenerateOptions: sdkOpts})
+	result, err := model.DoStream(ctx, openroutersdk.StreamOptions{GenerateOptions: sdkOpts})
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +173,7 @@ func (a *OpenRouterAdapter) Stream(ctx context.Context, opts GenerateOptions) (<
 					return
 				}
 				for _, mapped := range mapOpenRouterStreamPart(part) {
-					out <- mapped
+					out <- fillStreamMetadataModelID(mapped, effectiveModelID)
 				}
 			}
 		}

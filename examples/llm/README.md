@@ -31,6 +31,7 @@ yet and should be treated as later work for this layer.
 | `toolkit` | Scoped file/shell tools driving a real agent loop that does on-disk work | `toolkit.Files`/`Shell`/`Tools`/`Merge`, `AgentLoop` |
 | `store` | Durable multi-turn runs: persist a transcript, resume from a fresh load | `store.RunStore`, `store/file`, `Client.Generate` |
 | `stream` | Token-by-token output; reasoning vs. answer deltas; finish/error contract | `Client.Stream`, the `StreamPart` union |
+| `model` | Provider-local per-request model selection on one client | `GenerateOptions.ModelID`, `CapabilitiesForModel` |
 | `reasoning` | Provider-neutral per-request reasoning/thinking effort | `GenerateOptions.Reasoning`, `ReasoningOptions` |
 | `failover` | Retrying against a fallback provider on a retryable error | `llm.WithFailover`, `llm.FailoverConfig` |
 | `cache` | Read-through response caching; identical calls skip the provider | `llm.WithCache`, `llm.CacheBackend` |
@@ -68,6 +69,25 @@ result, err := client.Generate(ctx, llm.GenerateOptions{
 Provider-specific knobs remain available through `ProviderOptions`, but neutral
 `Reasoning` wins when both are set.
 
+Use `llm.GenerateOptions.ModelID` to choose a different model for one request
+within the same provider:
+
+```go
+result, err := client.Generate(ctx, llm.GenerateOptions{
+    ModelID:  "claude-haiku-4-5",
+    Messages: messages,
+})
+```
+
+Empty `ModelID` means the client default. `ModelID` is provider-local, not a
+registry selector like `"openai:gpt-4o"`. Registry and adapter constructors are
+factory-backed and can switch same-provider models; direct wrappers around an
+existing provider model cannot switch and return `UnsupportedFeatureError` for a
+different requested model. Cache keys include the effective provider/model.
+`Capabilities()` describes the default model; `CapabilitiesForModel(id)` is
+model-scoped. For cross-provider failover, use `FailoverConfig.RewriteOptions`
+to map provider-local model IDs for fallback attempts.
+
 ## Running
 
 ```bash
@@ -76,6 +96,7 @@ go run ./examples/llm/schema
 go run ./examples/llm/toolkit
 go run ./examples/llm/store
 go run ./examples/llm/stream
+go run ./examples/llm/model
 go run ./examples/llm/reasoning
 go run ./examples/llm/failover
 go run ./examples/llm/cache

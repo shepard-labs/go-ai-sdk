@@ -17,19 +17,28 @@ import (
 // ---- Google ----
 
 type fakeGoogleModel struct {
-	lastOptions google.GenerateOptions
-	result      *google.GenerateResult
+	modelID       string
+	generateCalls int
+	lastOptions   google.GenerateOptions
+	result        *google.GenerateResult
+	stream        *google.StreamResult
 }
 
-func (f *fakeGoogleModel) ModelID() string                          { return "fake" }
+func (f *fakeGoogleModel) ModelID() string {
+	if f.modelID != "" {
+		return f.modelID
+	}
+	return "fake"
+}
 func (f *fakeGoogleModel) Provider() string                         { return "fake" }
 func (f *fakeGoogleModel) SupportURLs() map[string][]*regexp.Regexp { return nil }
 func (f *fakeGoogleModel) DoGenerate(ctx context.Context, opts google.GenerateOptions) (*google.GenerateResult, error) {
+	f.generateCalls++
 	f.lastOptions = opts
 	return f.result, nil
 }
 func (f *fakeGoogleModel) DoStream(ctx context.Context, opts google.StreamOptions) (*google.StreamResult, error) {
-	return nil, nil
+	return f.stream, nil
 }
 
 func TestGoogleAdapterTranslation(t *testing.T) {
@@ -147,19 +156,28 @@ func TestCohereAdapterTranslation(t *testing.T) {
 // ---- OpenRouter ----
 
 type fakeOpenRouterModel struct {
-	lastOptions openrouter.GenerateOptions
-	result      *openrouter.GenerateResult
+	modelID       string
+	generateCalls int
+	lastOptions   openrouter.GenerateOptions
+	result        *openrouter.GenerateResult
+	stream        *openrouter.StreamResult
 }
 
-func (f *fakeOpenRouterModel) ModelID() string                          { return "fake" }
+func (f *fakeOpenRouterModel) ModelID() string {
+	if f.modelID != "" {
+		return f.modelID
+	}
+	return "fake"
+}
 func (f *fakeOpenRouterModel) Provider() string                         { return "fake" }
 func (f *fakeOpenRouterModel) SupportURLs() map[string][]*regexp.Regexp { return nil }
 func (f *fakeOpenRouterModel) DoGenerate(ctx context.Context, opts openrouter.GenerateOptions) (*openrouter.GenerateResult, error) {
+	f.generateCalls++
 	f.lastOptions = opts
 	return f.result, nil
 }
 func (f *fakeOpenRouterModel) DoStream(ctx context.Context, opts openrouter.StreamOptions) (*openrouter.StreamResult, error) {
-	return nil, nil
+	return f.stream, nil
 }
 
 func TestOpenRouterAdapterTranslation(t *testing.T) {

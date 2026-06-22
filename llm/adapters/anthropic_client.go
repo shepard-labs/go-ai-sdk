@@ -12,7 +12,9 @@ import (
 
 // AnthropicAdapter adapts go-ai-sdk Anthropic models to the Client interface.
 type AnthropicAdapter struct {
-	model anthropicsdk.LanguageModel
+	model          anthropicsdk.LanguageModel
+	defaultModelID string
+	newModel       func(modelID string) anthropicsdk.LanguageModel
 }
 
 // AnthropicModelID names an Anthropic model accepted by NewAnthropicClient.
@@ -29,7 +31,7 @@ const (
 
 // NewAnthropicAdapter wraps an existing Anthropic language model as a Client.
 func NewAnthropicAdapter(model anthropicsdk.LanguageModel) Client {
-	return &AnthropicAdapter{model: model}
+	return &AnthropicAdapter{model: model, defaultModelID: model.ModelID()}
 }
 
 // NewAnthropicClient creates an Anthropic-backed Client from an API key and model ID.
@@ -38,12 +40,26 @@ func NewAnthropicClient(apiKey string, modelID AnthropicModelID) (Client, error)
 	if err := provider.Err(); err != nil {
 		return nil, err
 	}
-	return NewAnthropicAdapter(provider.Model(string(modelID))), nil
+	defaultModelID := string(modelID)
+	return &AnthropicAdapter{
+		model:          provider.Model(defaultModelID),
+		defaultModelID: defaultModelID,
+		newModel: func(id string) anthropicsdk.LanguageModel {
+			return provider.Model(id)
+		},
+	}, nil
 }
 
 // Capabilities reports the feature set supported by the Anthropic adapter.
 func (a *AnthropicAdapter) Capabilities() llm.Capabilities {
-	return llm.Capabilities{
+	return a.CapabilitiesForModel(a.defaultModelID)
+}
+
+func (a *AnthropicAdapter) CapabilitiesForModel(modelID string) llm.Capabilities {
+	if modelID == "" {
+		modelID = a.defaultModelID
+	}
+	return capabilitiesWithModelID(llm.Capabilities{
 		Provider:           "anthropic",
 		Streaming:          true,
 		ToolCalling:        true,
@@ -57,20 +73,63 @@ func (a *AnthropicAdapter) Capabilities() llm.Capabilities {
 		Reasoning:          true,
 		ParallelToolCalls:  true,
 		PromptCaching:      true,
+	}, modelID)
+}
+
+func (a *AnthropicAdapter) Identity() llm.Identity {
+	return llm.Identity{Provider: "anthropic", ModelID: a.defaultModelID}
+}
+
+func (a *AnthropicAdapter) RequestIdentity(opts GenerateOptions) (llm.Identity, error) {
+	modelID, err := a.effectiveModelID(opts)
+	if err != nil {
+		return llm.Identity{}, err
 	}
+	return llm.Identity{Provider: "anthropic", ModelID: modelID}, nil
+}
+
+func (a *AnthropicAdapter) effectiveModelID(opts GenerateOptions) (string, error) {
+	if err := llm.ValidateModelID(opts.ModelID); err != nil {
+		return "", err
+	}
+	if opts.ModelID == "" {
+		return a.defaultModelID, nil
+	}
+	return opts.ModelID, nil
+}
+
+func (a *AnthropicAdapter) modelForOptions(opts GenerateOptions) (anthropicsdk.LanguageModel, string, error) {
+	modelID, err := a.effectiveModelID(opts)
+	if err != nil {
+		return nil, "", err
+	}
+	if modelID == a.defaultModelID {
+		return a.model, modelID, nil
+	}
+	if a.newModel == nil {
+		return nil, "", modelOverrideError("anthropic")
+	}
+	return a.newModel(modelID), modelID, nil
 }
 
 // Generate sends a completion request through the Anthropic SDK.
 func (a *AnthropicAdapter) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
+	model, effectiveModelID, err := a.modelForOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	sdkOpts, warnings, err := toAnthropicOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.model.DoGenerate(ctx, sdkOpts)
+	result, err := model.DoGenerate(ctx, sdkOpts)
 	if err != nil {
 		return nil, err
 	}
 	out := fromAnthropicResult(result)
+	if out != nil && out.Response.ModelID == "" {
+		out.Response.ModelID = effectiveModelID
+	}
 	if out != nil && len(warnings) > 0 {
 		out.Warnings = append(warnings, out.Warnings...)
 	}
@@ -81,11 +140,15 @@ func (a *AnthropicAdapter) Generate(ctx context.Context, opts GenerateOptions) (
 // maps provider-native StreamPart values into the neutral StreamPart union.
 // spec §1.1
 func (a *AnthropicAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
+	model, effectiveModelID, err := a.modelForOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	sdkOpts, _, err := toAnthropicOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.model.DoStream(ctx, sdkOpts)
+	result, err := model.DoStream(ctx, sdkOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +169,7 @@ func (a *AnthropicAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-
 					return
 				}
 				for _, mapped := range mapAnthropicStreamPart(part) {
-					out <- mapped
+					out <- fillStreamMetadataModelID(mapped, effectiveModelID)
 				}
 			}
 		}

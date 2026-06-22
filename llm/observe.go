@@ -89,3 +89,14 @@ func (c observerClient) Stream(ctx context.Context, opts GenerateOptions) (<-cha
 	}()
 	return out, nil
 }
+
+func (c observerClient) Identity() Identity {
+	if p, ok := c.client.(IdentifiedClient); ok {
+		return p.Identity()
+	}
+	return Identity{}
+}
+
+func (c observerClient) RequestIdentity(opts GenerateOptions) (Identity, error) {
+	return clientIdentity(c.client, opts)
+}

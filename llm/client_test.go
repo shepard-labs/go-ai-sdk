@@ -48,6 +48,29 @@ func TestREQLLM001_ClientHasGenerateAndStream(t *testing.T) {
 	}
 }
 
+func TestGenerateOptionsHasModelID(t *testing.T) {
+	field, ok := reflect.TypeOf(GenerateOptions{}).FieldByName("ModelID")
+	if !ok {
+		t.Fatal("GenerateOptions missing ModelID")
+	}
+	if field.Type.Kind() != reflect.String {
+		t.Fatalf("GenerateOptions.ModelID type = %s, want string", field.Type)
+	}
+}
+
+func TestValidateModelID(t *testing.T) {
+	for _, modelID := range []string{"", "gpt-4o", "claude-haiku-4-5", "llama3.1:8b"} {
+		if err := ValidateModelID(modelID); err != nil {
+			t.Fatalf("ValidateModelID(%q) error = %v", modelID, err)
+		}
+	}
+	for _, modelID := range []string{" ", "\t", " gpt-4o", "gpt-4o "} {
+		if err := ValidateModelID(modelID); err == nil {
+			t.Fatalf("ValidateModelID(%q) nil error, want invalid", modelID)
+		}
+	}
+}
+
 func TestREQLLM003_PublicTypesNoGoAISDKReexport(t *testing.T) {
 	types := []reflect.Type{
 		reflect.TypeOf(Message{}),

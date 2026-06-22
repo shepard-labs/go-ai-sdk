@@ -89,3 +89,50 @@ func TestREQFAILOVER005_ComposableWithCacheAndAdapter(t *testing.T) {
 		t.Fatalf("calls primary=%d fallback=%d, want 1/1", primary.callCount(), fallback.callCount())
 	}
 }
+
+func TestFailoverRewriteOptionsRewritesFallbackModelID(t *testing.T) {
+	primaryErr := errors.New("primary")
+	primary := &mockClient{errors: []error{primaryErr}}
+	fallback := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonStop}}}}
+	client := WithFailover(primary, FailoverConfig{
+		ShouldFailover: func(context.Context, error) bool { return true },
+		GetNext:        func(int) Client { return fallback },
+		MaxAttempts:    1,
+		RewriteOptions: func(attempt int, opts GenerateOptions) GenerateOptions {
+			if attempt == 1 {
+				opts.ModelID = "gpt-4o"
+			}
+			return opts
+		},
+	})
+
+	_, err := client.Generate(context.Background(), GenerateOptions{ModelID: "claude-sonnet-4-6"})
+	if err != nil {
+		t.Fatalf("Generate error = %v", err)
+	}
+	if got := primary.optionAt(0).ModelID; got != "claude-sonnet-4-6" {
+		t.Fatalf("primary ModelID = %q, want claude-sonnet-4-6", got)
+	}
+	if got := fallback.optionAt(0).ModelID; got != "gpt-4o" {
+		t.Fatalf("fallback ModelID = %q, want gpt-4o", got)
+	}
+}
+
+func TestFailoverWithoutRewriteForwardsModelIDUnchanged(t *testing.T) {
+	primaryErr := errors.New("primary")
+	primary := &mockClient{errors: []error{primaryErr}}
+	fallback := &mockClient{results: []*GenerateResult{{FinishReason: FinishReason{Unified: FinishReasonStop}}}}
+	client := WithFailover(primary, FailoverConfig{
+		ShouldFailover: func(context.Context, error) bool { return true },
+		GetNext:        func(int) Client { return fallback },
+		MaxAttempts:    1,
+	})
+
+	_, err := client.Generate(context.Background(), GenerateOptions{ModelID: "claude-sonnet-4-6"})
+	if err != nil {
+		t.Fatalf("Generate error = %v", err)
+	}
+	if got := fallback.optionAt(0).ModelID; got != "claude-sonnet-4-6" {
+		t.Fatalf("fallback ModelID = %q, want unchanged", got)
+	}
+}

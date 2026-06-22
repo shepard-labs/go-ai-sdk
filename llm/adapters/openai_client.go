@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/shepard-labs/go-ai-sdk/llm"
 	openaisdk "github.com/shepard-labs/go-ai-sdk/openai"
 )
 
@@ -13,7 +14,9 @@ import (
 // openaicompatible, so message, tool, finish-reason, and usage translation is
 // shared with the OpenAI-compatible adapter.
 type OpenAIAdapter struct {
-	model openaisdk.LanguageModel
+	model          openaisdk.LanguageModel
+	defaultModelID string
+	newModel       func(modelID string) openaisdk.LanguageModel
 }
 
 // OpenAISettings configures an OpenAI Client.
@@ -25,7 +28,7 @@ type OpenAISettings struct {
 
 // NewOpenAIAdapter wraps an existing OpenAI chat model as a Client.
 func NewOpenAIAdapter(model openaisdk.LanguageModel) Client {
-	return &OpenAIAdapter{model: model}
+	return &OpenAIAdapter{model: model, defaultModelID: model.ModelID()}
 }
 
 // NewOpenAIClient creates an OpenAI-backed Client from an API key and model ID.
@@ -44,12 +47,23 @@ func NewOpenAIClientWithSettings(settings OpenAISettings, modelID string) (Clien
 	if err := provider.Err(); err != nil {
 		return nil, err
 	}
-	return NewOpenAIAdapter(provider.Chat(modelID)), nil
+	return &OpenAIAdapter{
+		model:          provider.Chat(modelID),
+		defaultModelID: modelID,
+		newModel:       provider.Chat,
+	}, nil
 }
 
 // Capabilities reports the feature set supported by the OpenAI adapter.
 func (a *OpenAIAdapter) Capabilities() Capabilities {
-	return Capabilities{
+	return a.CapabilitiesForModel(a.defaultModelID)
+}
+
+func (a *OpenAIAdapter) CapabilitiesForModel(modelID string) Capabilities {
+	if modelID == "" {
+		modelID = a.defaultModelID
+	}
+	return capabilitiesWithModelID(Capabilities{
 		Provider:           "openai",
 		Streaming:          true,
 		ToolCalling:        true,
@@ -63,20 +77,63 @@ func (a *OpenAIAdapter) Capabilities() Capabilities {
 		Reasoning:          true,
 		ParallelToolCalls:  true,
 		PromptCaching:      false,
+	}, modelID)
+}
+
+func (a *OpenAIAdapter) Identity() Identity {
+	return Identity{Provider: "openai", ModelID: a.defaultModelID}
+}
+
+func (a *OpenAIAdapter) RequestIdentity(opts GenerateOptions) (Identity, error) {
+	modelID, err := a.effectiveModelID(opts)
+	if err != nil {
+		return Identity{}, err
 	}
+	return Identity{Provider: "openai", ModelID: modelID}, nil
+}
+
+func (a *OpenAIAdapter) effectiveModelID(opts GenerateOptions) (string, error) {
+	if err := llm.ValidateModelID(opts.ModelID); err != nil {
+		return "", err
+	}
+	if opts.ModelID == "" {
+		return a.defaultModelID, nil
+	}
+	return opts.ModelID, nil
+}
+
+func (a *OpenAIAdapter) modelForOptions(opts GenerateOptions) (openaisdk.LanguageModel, string, error) {
+	modelID, err := a.effectiveModelID(opts)
+	if err != nil {
+		return nil, "", err
+	}
+	if modelID == a.defaultModelID {
+		return a.model, modelID, nil
+	}
+	if a.newModel == nil {
+		return nil, "", modelOverrideError("openai")
+	}
+	return a.newModel(modelID), modelID, nil
 }
 
 // Generate sends a completion request through the OpenAI SDK.
 func (a *OpenAIAdapter) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
+	model, effectiveModelID, err := a.modelForOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	sdkOpts, warnings, err := toOpenAICompatibleOptions(opts, true)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.model.DoGenerate(ctx, sdkOpts)
+	result, err := model.DoGenerate(ctx, sdkOpts)
 	if err != nil {
 		return nil, err
 	}
 	out := fromOpenAIResult(result)
+	if out != nil && out.Response.ModelID == "" {
+		out.Response.ModelID = effectiveModelID
+	}
 	if out != nil && len(warnings) > 0 {
 		out.Warnings = append(warnings, out.Warnings...)
 	}
@@ -87,11 +144,15 @@ func (a *OpenAIAdapter) Generate(ctx context.Context, opts GenerateOptions) (*Ge
 // provider-native StreamPart values into the neutral StreamPart union.
 // spec §1.1
 func (a *OpenAIAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
+	model, effectiveModelID, err := a.modelForOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	sdkOpts, _, err := toOpenAICompatibleOptions(opts, true)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.model.DoStream(ctx, openaisdk.StreamOptions{GenerateOptions: sdkOpts})
+	result, err := model.DoStream(ctx, openaisdk.StreamOptions{GenerateOptions: sdkOpts})
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +173,7 @@ func (a *OpenAIAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-cha
 					return
 				}
 				for _, mapped := range mapOpenAIStreamPart(part) {
-					out <- mapped
+					out <- fillStreamMetadataModelID(mapped, effectiveModelID)
 				}
 			}
 		}
