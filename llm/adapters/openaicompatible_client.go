@@ -72,7 +72,7 @@ func (a *OpenAICompatibleAdapter) Capabilities() Capabilities {
 
 // Generate sends a completion request through the OpenAI-compatible SDK.
 func (a *OpenAICompatibleAdapter) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
-	sdkOpts, warnings, err := toOpenAICompatibleOptions(opts)
+	sdkOpts, warnings, err := toOpenAICompatibleOptions(opts, false)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +91,7 @@ func (a *OpenAICompatibleAdapter) Generate(ctx context.Context, opts GenerateOpt
 // SDK and maps provider-native StreamPart values into the neutral StreamPart
 // union. spec §1.1
 func (a *OpenAICompatibleAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
-	sdkOpts, _, err := toOpenAICompatibleOptions(opts)
+	sdkOpts, _, err := toOpenAICompatibleOptions(opts, false)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,16 @@ func openAICompatibleProviderMetadata(provider string, pm openaicompatiblesdk.Pr
 	return ProviderMetadata{provider: pm}
 }
 
-func toOpenAICompatibleOptions(opts GenerateOptions) (openaicompatiblesdk.GenerateOptions, []Warning, error) {
+func toOpenAICompatibleOptions(opts GenerateOptions, allowNeutralReasoning bool) (openaicompatiblesdk.GenerateOptions, []Warning, error) {
+	var warnings []Warning
+	if err := validateReasoning(opts.UnsupportedFeaturePolicy, "openai", opts.Reasoning, &warnings); err != nil {
+		return openaicompatiblesdk.GenerateOptions{}, nil, err
+	}
+	if opts.Reasoning != nil && !allowNeutralReasoning {
+		if err := unsupportedFeature(opts.UnsupportedFeaturePolicy, "openaicompatible", "reasoning", "neutral reasoning is not supported by generic OpenAI-compatible adapters", &warnings); err != nil {
+			return openaicompatiblesdk.GenerateOptions{}, nil, err
+		}
+	}
 	messages := make([]openaicompatiblesdk.Message, 0, len(opts.Messages)+1)
 	if opts.System != "" {
 		messages = append(messages, openaicompatiblesdk.SystemMessage{Content: opts.System})
@@ -249,11 +258,50 @@ func toOpenAICompatibleOptions(opts GenerateOptions) (openaicompatiblesdk.Genera
 			if sdkOpts.ProviderOptions == nil {
 				sdkOpts.ProviderOptions = openaicompatiblesdk.ProviderOptions{}
 			}
-			sdkOpts.ProviderOptions[key] = po
+			sdkOpts.ProviderOptions[key] = cloneProviderOptionMap(po)
+		}
+	}
+	if opts.Reasoning != nil && allowNeutralReasoning {
+		if err := applyOpenAIReasoningOptions(&sdkOpts, opts.Reasoning, opts.UnsupportedFeaturePolicy, &warnings); err != nil {
+			return openaicompatiblesdk.GenerateOptions{}, nil, err
 		}
 	}
 	sdkOpts.Headers = toHTTPHeader(opts.Headers)
-	return sdkOpts, nil, nil
+	return sdkOpts, warnings, nil
+}
+
+func applyOpenAIReasoningOptions(sdkOpts *openaicompatiblesdk.GenerateOptions, reasoning *llm.ReasoningOptions, policy llm.UnsupportedFeaturePolicy, warnings *[]llm.Warning) error {
+	if reasoning == nil || (reasoning.Effort == "" && reasoning.BudgetTokens == nil) {
+		return nil
+	}
+	if reasoning.BudgetTokens != nil && *reasoning.BudgetTokens > 0 {
+		if err := reasoningFeature(policy, "openai", "reasoning_budget_unsupported", "reasoning_budget", "budgetTokens are not supported by OpenAI reasoning effort", warnings); err != nil {
+			return err
+		}
+	}
+	effort := string(reasoning.Effort)
+	switch reasoning.Effort {
+	case "":
+		return nil
+	case llm.ReasoningXHigh:
+		if err := reasoningFeature(policy, "openai", "reasoning_effort_downgraded", "reasoning_effort", "xhigh is not supported by OpenAI; using high", warnings); err != nil {
+			return err
+		}
+		effort = string(llm.ReasoningHigh)
+	}
+	if sdkOpts.ProviderOptions == nil {
+		sdkOpts.ProviderOptions = openaicompatiblesdk.ProviderOptions{}
+	}
+	openaiOptions := cloneProviderOptionMap(sdkOpts.ProviderOptions["openai"])
+	if openaiOptions == nil {
+		openaiOptions = map[string]any{}
+	}
+	if _, exists := openaiOptions["reasoningEffort"]; exists {
+		*warnings = append(*warnings, llm.Warning{Code: "reasoning_provider_option_overridden", Message: "reasoning_effort: neutral Reasoning overrides ProviderOptions[\"openai\"].reasoningEffort", Provider: "openai"})
+	}
+	openaiOptions["reasoningEffort"] = effort
+	sdkOpts.ProviderOptions["openai"] = openaiOptions
+	return nil
 }
 
 // openAIResponseFormat maps a neutral ResponseFormat to the openaicompatible

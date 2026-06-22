@@ -84,6 +84,10 @@ Enables extended thinking through `ProviderOptions["google"].thinkingConfig`,
 requests reasoning content, and prints reasoning and final answer blocks
 separately.
 
+The provider-neutral `llm` layer also supports per-request reasoning effort via
+`llm.GenerateOptions.Reasoning`; use Google `ProviderOptions` when you need exact
+Gemini `thinkingConfig` fields such as `thinkingBudget`.
+
 ```bash
 go run ./examples/google/thinking/main.go
 ```

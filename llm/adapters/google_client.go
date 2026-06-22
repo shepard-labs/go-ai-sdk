@@ -194,6 +194,10 @@ func googleProviderMetadata(pm googlesdk.ProviderMetadata) ProviderMetadata {
 }
 
 func toGoogleOptions(opts GenerateOptions) (googlesdk.GenerateOptions, []Warning, error) {
+	var warnings []Warning
+	if err := validateReasoning(opts.UnsupportedFeaturePolicy, "google", opts.Reasoning, &warnings); err != nil {
+		return googlesdk.GenerateOptions{}, nil, err
+	}
 	messages := make([]googlesdk.Message, 0, len(opts.Messages)+1)
 	if opts.System != "" {
 		messages = append(messages, googlesdk.SystemMessage{Content: opts.System})
@@ -232,11 +236,21 @@ func toGoogleOptions(opts GenerateOptions) (googlesdk.GenerateOptions, []Warning
 	}
 	if opts.ProviderOptions != nil {
 		if po, ok := opts.ProviderOptions["google"]; ok {
-			sdkOpts.ProviderOptions = googlesdk.ProviderOptions{"google": po}
+			sdkOpts.ProviderOptions = googlesdk.ProviderOptions{"google": cloneProviderOptionMap(po)}
+		}
+	}
+	if opts.Reasoning != nil {
+		if opts.Reasoning.BudgetTokens != nil {
+			if err := reasoningFeature(opts.UnsupportedFeaturePolicy, "google", "reasoning_budget_unsupported", "reasoning_budget", "budgetTokens are not supported by the neutral Google adapter; use ProviderOptions[\"google\"].thinkingConfig for exact Gemini budgets", &warnings); err != nil {
+				return googlesdk.GenerateOptions{}, nil, err
+			}
+		}
+		if opts.Reasoning.Effort != "" {
+			sdkOpts.Reasoning = string(opts.Reasoning.Effort)
 		}
 	}
 	sdkOpts.Headers = toHTTPHeader(opts.Headers)
-	return sdkOpts, nil, nil
+	return sdkOpts, warnings, nil
 }
 
 // googleResponseFormat maps a neutral ResponseFormat to the Google provider

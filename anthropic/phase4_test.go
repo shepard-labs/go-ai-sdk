@@ -46,6 +46,14 @@ func TestThinkingDisabledRequest(t *testing.T) {
 	}
 }
 
+func TestPerRequestThinkingOverridesModelDefault(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: 2048}}).(*anthropicLanguageModel)
+	req, _ := model.buildRequest(GenerateOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeDisabled}}, false)
+	if req.Thinking == nil || req.Thinking.Type != "disabled" || req.Thinking.BudgetTokens != 0 {
+		t.Fatalf("request = %#v", req)
+	}
+}
+
 func TestStructuredOutputOutputFormatMode(t *testing.T) {
 	schema := map[string]any{"type": "object", "default": map[string]any{"bad": true}, "properties": map[string]any{"name": map[string]any{"type": "string"}}}
 	model := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-4-5", ModelOptions{StructuredOutputMode: StructuredOutputModeOutputFormat}).(*anthropicLanguageModel)

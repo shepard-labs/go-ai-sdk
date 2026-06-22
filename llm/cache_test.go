@@ -88,3 +88,41 @@ func TestREQCACHE005_ReturnsSamePointerReadOnly(t *testing.T) {
 		t.Fatalf("underlying calls = %d, want 1", underlying.callCount())
 	}
 }
+
+func TestCacheKeyIncludesReasoningAndProviderOptions(t *testing.T) {
+	highBudget := 4096
+	otherBudget := 8192
+	base := GenerateOptions{System: "same"}
+	high := base
+	high.Reasoning = &ReasoningOptions{Effort: ReasoningHigh, BudgetTokens: &highBudget}
+	highAgain := base
+	highAgain.Reasoning = &ReasoningOptions{Effort: ReasoningHigh, BudgetTokens: &highBudget}
+	none := base
+	none.Reasoning = &ReasoningOptions{Effort: ReasoningNone}
+	other := base
+	other.Reasoning = &ReasoningOptions{Effort: ReasoningHigh, BudgetTokens: &otherBudget}
+	provider := base
+	provider.ProviderOptions = ProviderOptions{"openai": {"reasoningEffort": "high"}}
+
+	highKey, err := cacheKey(high)
+	if err != nil {
+		t.Fatalf("cacheKey(high) error = %v", err)
+	}
+	highAgainKey, err := cacheKey(highAgain)
+	if err != nil {
+		t.Fatalf("cacheKey(highAgain) error = %v", err)
+	}
+	if highKey != highAgainKey {
+		t.Fatalf("same reasoning produced different keys: %q != %q", highKey, highAgainKey)
+	}
+
+	for name, opts := range map[string]GenerateOptions{"nil": base, "none": none, "other_budget": other, "provider_options": provider} {
+		key, err := cacheKey(opts)
+		if err != nil {
+			t.Fatalf("cacheKey(%s) error = %v", name, err)
+		}
+		if key == highKey {
+			t.Fatalf("cacheKey(%s) = high key; reasoning/provider options not included", name)
+		}
+	}
+}

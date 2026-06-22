@@ -82,6 +82,10 @@ go run ./examples/anthropic/structured-output/main.go
 Enables extended thinking through model options, requests reasoning content, and
 prints reasoning and final answer blocks separately.
 
+The provider-neutral `llm` layer also supports per-request reasoning through
+`llm.GenerateOptions.Reasoning`; this native example shows the Anthropic package's
+direct `ModelOptions.Thinking` API.
+
 ```bash
 go run ./examples/anthropic/thinking/main.go
 ```

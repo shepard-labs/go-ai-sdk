@@ -85,6 +85,7 @@ type Client interface {
 - `Temperature`, `TopP`, `TopK`, stop sequences, and seed
 - `ToolChoice`
 - `ResponseFormat`
+- `Reasoning` for provider-neutral reasoning/thinking control
 - request headers and metadata
 - `ProviderOptions` for provider-specific escape hatches
 - `UnsupportedFeaturePolicy`
@@ -103,6 +104,55 @@ with a documented fallback and return a warning instead.
 - response metadata
 - provider metadata
 
+## Reasoning
+
+Use `GenerateOptions.Reasoning` for portable per-request reasoning or thinking
+control:
+
+```go
+result, err := client.Generate(ctx, llm.GenerateOptions{
+    Messages: []llm.Message{{
+        Role:    "user",
+        Content: []llm.Content{llm.TextContent{Text: "Solve this carefully."}},
+    }},
+    Reasoning: &llm.ReasoningOptions{
+        Effort: llm.ReasoningHigh,
+    },
+})
+```
+
+Supported neutral efforts are `ReasoningNone`, `ReasoningMinimal`,
+`ReasoningLow`, `ReasoningMedium`, `ReasoningHigh`, and `ReasoningXHigh`.
+`Reasoning: nil` means "use provider defaults"; `ReasoningNone` explicitly
+disables reasoning when the provider supports it.
+
+`BudgetTokens` requests an exact reasoning budget where supported:
+
+```go
+budget := 4096
+result, err := client.Generate(ctx, llm.GenerateOptions{
+    Messages: messages,
+    Reasoning: &llm.ReasoningOptions{
+        BudgetTokens: &budget,
+    },
+})
+```
+
+Provider behavior:
+
+- Anthropic maps neutral reasoning to per-request `ThinkingConfig`; exact budgets
+  are supported, and Anthropic adds the thinking budget to `MaxTokens`.
+- Google maps neutral effort to Gemini thinking; exact neutral budgets are not
+  mapped by the neutral adapter, so use `ProviderOptions["google"].thinkingConfig`
+  for provider-specific Gemini budgets.
+- OpenAI maps neutral effort to `ProviderOptions["openai"].reasoningEffort`;
+  exact budgets are unsupported.
+- Generic OpenAI-compatible adapters do not assume reasoning support and return
+  `UnsupportedFeatureError` unless warn policy is enabled.
+
+If both `Reasoning` and provider-specific reasoning options are set, the neutral
+`Reasoning` field wins because it is the explicit per-request instruction.
+
 ## Provider options
 
 Common portable fields should be set directly on `GenerateOptions`. Put
@@ -116,7 +166,7 @@ result, err := client.Generate(ctx, llm.GenerateOptions{
     }},
     ProviderOptions: llm.ProviderOptions{
         "openrouter": {
-            "reasoning": map[string]any{"effort": "medium"},
+            "provider": map[string]any{"sort": "throughput"},
         },
     },
 })
@@ -239,5 +289,5 @@ for resuming or inspecting agent runs.
 ## Examples
 
 Runnable examples live in `examples/llm` and cover registry selection, schema
-tools, toolkit agents, stores, streaming, failover, cache, vision, validation,
-and token budgets.
+tools, toolkit agents, stores, streaming, reasoning, failover, cache, vision,
+validation, and token budgets.

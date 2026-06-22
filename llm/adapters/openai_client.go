@@ -68,7 +68,7 @@ func (a *OpenAIAdapter) Capabilities() Capabilities {
 
 // Generate sends a completion request through the OpenAI SDK.
 func (a *OpenAIAdapter) Generate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
-	sdkOpts, warnings, err := toOpenAICompatibleOptions(opts)
+	sdkOpts, warnings, err := toOpenAICompatibleOptions(opts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (a *OpenAIAdapter) Generate(ctx context.Context, opts GenerateOptions) (*Ge
 // provider-native StreamPart values into the neutral StreamPart union.
 // spec §1.1
 func (a *OpenAIAdapter) Stream(ctx context.Context, opts GenerateOptions) (<-chan StreamPart, error) {
-	sdkOpts, _, err := toOpenAICompatibleOptions(opts)
+	sdkOpts, _, err := toOpenAICompatibleOptions(opts, true)
 	if err != nil {
 		return nil, err
 	}

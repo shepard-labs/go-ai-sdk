@@ -401,6 +401,7 @@ type GenerateOptions struct {
 	FrequencyPenalty *float64
 	PresencePenalty  *float64
 	Seed             *int
+	Thinking         *ThinkingConfig
 }
 
 type StreamOptions = GenerateOptions

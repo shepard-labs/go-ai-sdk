@@ -97,6 +97,45 @@ func unsupportedFeature(policy llm.UnsupportedFeaturePolicy, provider, feature, 
 	return &llm.UnsupportedFeatureError{Provider: provider, Feature: feature, Message: msg}
 }
 
+func reasoningFeature(policy llm.UnsupportedFeaturePolicy, provider, code, feature, msg string, warnings *[]llm.Warning) error {
+	if policy == llm.UnsupportedFeaturePolicyWarn {
+		*warnings = append(*warnings, llm.Warning{Code: code, Message: fmt.Sprintf("%s: %s", feature, msg), Provider: provider})
+		return nil
+	}
+	return &llm.UnsupportedFeatureError{Provider: provider, Feature: feature, Message: msg}
+}
+
+func validateReasoning(policy llm.UnsupportedFeaturePolicy, provider string, reasoning *llm.ReasoningOptions, warnings *[]llm.Warning) error {
+	if reasoning == nil {
+		return nil
+	}
+	switch reasoning.Effort {
+	case "", llm.ReasoningNone, llm.ReasoningMinimal, llm.ReasoningLow, llm.ReasoningMedium, llm.ReasoningHigh, llm.ReasoningXHigh:
+	default:
+		return reasoningFeature(policy, provider, "unsupported_feature", "reasoning_effort", fmt.Sprintf("unknown reasoning effort %q", reasoning.Effort), warnings)
+	}
+	if reasoning.BudgetTokens != nil {
+		if *reasoning.BudgetTokens < 0 {
+			return reasoningFeature(policy, provider, "unsupported_feature", "reasoning_budget", "budgetTokens must be non-negative", warnings)
+		}
+		if reasoning.Effort == llm.ReasoningNone && *reasoning.BudgetTokens > 0 {
+			return reasoningFeature(policy, provider, "unsupported_feature", "reasoning_budget", "budgetTokens cannot be positive when reasoning effort is none", warnings)
+		}
+	}
+	return nil
+}
+
+func cloneProviderOptionMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	out := make(map[string]any, len(input))
+	for k, v := range input {
+		out[k] = v
+	}
+	return out
+}
+
 // toHTTPHeader converts a neutral single-valued header map to an http.Header.
 // Returns nil for an empty map.
 func toHTTPHeader(headers map[string]string) http.Header {

@@ -190,6 +190,9 @@ func anthropicToolInputDeltaText(delta anthropicsdk.Delta) string {
 
 func toAnthropicOptions(opts GenerateOptions) (anthropicsdk.GenerateOptions, []Warning, error) {
 	var warnings []Warning
+	if err := validateReasoning(opts.UnsupportedFeaturePolicy, "anthropic", opts.Reasoning, &warnings); err != nil {
+		return anthropicsdk.GenerateOptions{}, nil, err
+	}
 	messages := make([]anthropicsdk.Message, 0, len(opts.Messages)+1)
 	if opts.System != "" {
 		messages = append(messages, anthropicsdk.SystemMessage{Content: opts.System})
@@ -215,6 +218,13 @@ func toAnthropicOptions(opts GenerateOptions) (anthropicsdk.GenerateOptions, []W
 	sdkOpts.TopK = opts.TopK
 	sdkOpts.StopSequences = opts.Stop
 	sdkOpts.Seed = opts.Seed
+	if opts.Reasoning != nil {
+		thinking, err := anthropicThinkingFromReasoning(opts.Reasoning)
+		if err != nil {
+			return anthropicsdk.GenerateOptions{}, nil, err
+		}
+		sdkOpts.Thinking = thinking
+	}
 
 	if choice, err := toAnthropicToolChoice(opts.ToolChoice, opts.UnsupportedFeaturePolicy, &warnings); err != nil {
 		return anthropicsdk.GenerateOptions{}, nil, err
@@ -243,6 +253,40 @@ func toAnthropicOptions(opts GenerateOptions) (anthropicsdk.GenerateOptions, []W
 	}
 
 	return sdkOpts, warnings, nil
+}
+
+func anthropicThinkingFromReasoning(reasoning *llm.ReasoningOptions) (*anthropicsdk.ThinkingConfig, error) {
+	if reasoning == nil {
+		return nil, nil
+	}
+	if reasoning.Effort == "" && reasoning.BudgetTokens == nil {
+		return nil, nil
+	}
+	if reasoning.Effort == llm.ReasoningNone {
+		return &anthropicsdk.ThinkingConfig{Type: anthropicsdk.ThinkingTypeDisabled}, nil
+	}
+	budget := anthropicReasoningBudget(reasoning.Effort)
+	if reasoning.BudgetTokens != nil {
+		budget = *reasoning.BudgetTokens
+	}
+	return &anthropicsdk.ThinkingConfig{Type: anthropicsdk.ThinkingTypeEnabled, BudgetTokens: budget}, nil
+}
+
+func anthropicReasoningBudget(effort llm.ReasoningEffort) int {
+	switch effort {
+	case llm.ReasoningMinimal:
+		return 1024
+	case llm.ReasoningLow:
+		return 2048
+	case llm.ReasoningMedium, "":
+		return 4096
+	case llm.ReasoningHigh:
+		return 8192
+	case llm.ReasoningXHigh:
+		return 16384
+	default:
+		return 4096
+	}
 }
 
 // toAnthropicToolChoice maps a neutral ToolChoice to the Anthropic SDK form.

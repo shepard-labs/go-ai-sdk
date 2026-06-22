@@ -149,6 +149,9 @@ func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, s
 	warnings = append(warnings, unsupportedWarnings(opts, ModelCapabilitiesForID(m.modelID))...)
 	preparedTools := prepareToolsForRequest(opts.Tools, opts.ToolOptions)
 	modelOptions := m.options
+	if opts.Thinking != nil {
+		modelOptions.Thinking = opts.Thinking
+	}
 	modelOptions.RequestTools = preparedTools
 	toolChoice := normalizeToolChoice(opts.ToolChoice)
 	if toolChoice != nil && toolChoice.DisableParallelToolUse {

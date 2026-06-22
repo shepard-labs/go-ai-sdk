@@ -55,7 +55,7 @@ Provider adapters can be used directly from `llm/adapters`, or registered by bla
 
 The production-neutral `llm` contract targets Anthropic, OpenAI, OpenAI-compatible providers, Google, and OpenRouter. Cohere remains available as a native provider package and adapter, but it is not implemented in the production-neutral compatibility matrix yet.
 
-The neutral request API includes messages, tools, max tokens, sampling controls (`Temperature`, `TopP`, `TopK`), stop sequences, seed, tool choice, response format, request headers, request metadata, provider options, and an unsupported-feature policy. Explicit unsupported options default to strict errors; set `UnsupportedFeaturePolicyWarn` when you want documented fallback behavior plus warnings.
+The neutral request API includes messages, tools, max tokens, sampling controls (`Temperature`, `TopP`, `TopK`), stop sequences, seed, tool choice, response format, per-request `Reasoning`, request headers, request metadata, provider options, and an unsupported-feature policy. Explicit unsupported options default to strict errors; set `UnsupportedFeaturePolicyWarn` when you want documented fallback behavior plus warnings.
 
 The neutral result API preserves content, structured finish reasons (`Unified` plus raw provider value), expanded usage, warnings, request metadata, response metadata, and provider metadata. Provider-specific escape hatches live under `ProviderOptions` keys such as `"anthropic"`, `"openai"`, `"google"`, or `"openrouter"`.
 
@@ -69,6 +69,17 @@ The neutral result API preserves content, structured finish reasons (`Unified` p
 | Cohere | ❌ not implemented | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 Streaming uses typed `StreamPart` events for text, reasoning, tool input deltas, warnings, metadata, finish, errors, and raw provider bytes where available. Use `CollectStream` to drain a stream into a `GenerateResult` while preserving warnings, metadata, usage, provider metadata, and partial content on errors.
+
+Portable reasoning control lives on `llm.GenerateOptions.Reasoning`:
+
+```go
+result, err := client.Generate(ctx, llm.GenerateOptions{
+    Messages: messages,
+    Reasoning: &llm.ReasoningOptions{Effort: llm.ReasoningHigh},
+})
+```
+
+`nil` reasoning preserves provider defaults. `ReasoningNone` explicitly disables reasoning where supported. Anthropic supports exact `BudgetTokens`; Google and OpenAI expose portable effort levels, while exact budgets remain provider-specific or unsupported.
 
 The neutral error model includes `UnsupportedFeatureError`, `APIError`, and helpers such as `IsRateLimit`, `IsAuth`, `IsInvalidRequest`, `IsUnsupported`, and `RetryAfter`. Middleware includes retry, failover, and cache wrappers; cache stores `Generate` results only and forwards `Stream` calls uncached.
 

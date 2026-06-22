@@ -145,6 +145,7 @@ type GenerateOptions struct {
 
 	ToolChoice     ToolChoice
 	ResponseFormat *ResponseFormat
+	Reasoning      *ReasoningOptions
 
 	Headers         map[string]string
 	Metadata        map[string]string
@@ -152,6 +153,26 @@ type GenerateOptions struct {
 
 	UnsupportedFeaturePolicy UnsupportedFeaturePolicy
 }
+
+// ReasoningOptions controls provider-neutral reasoning/thinking behavior for a
+// single generation call. A nil Reasoning field means "use provider defaults";
+// ReasoningNone explicitly disables reasoning when the provider supports it.
+type ReasoningOptions struct {
+	Effort       ReasoningEffort
+	BudgetTokens *int
+}
+
+// ReasoningEffort is a provider-neutral reasoning effort level.
+type ReasoningEffort string
+
+const (
+	ReasoningNone    ReasoningEffort = "none"
+	ReasoningMinimal ReasoningEffort = "minimal"
+	ReasoningLow     ReasoningEffort = "low"
+	ReasoningMedium  ReasoningEffort = "medium"
+	ReasoningHigh    ReasoningEffort = "high"
+	ReasoningXHigh   ReasoningEffort = "xhigh"
+)
 
 // ToolChoice describes the tool-selection constraint sent to the provider.
 // A zero-value ToolChoice (empty Type) means "provider default".
@@ -579,32 +600,37 @@ func cacheKey(opts GenerateOptions) (string, error) {
 		Values   map[string]string `json:"values"`
 	}
 	type canonicalOpts struct {
-		System      string   `json:"system,omitempty"`
-		Messages    any      `json:"messages,omitempty"`
-		Tools       any      `json:"tools,omitempty"`
-		MaxTokens   int      `json:"max_tokens,omitempty"`
-		Temperature *float64 `json:"temperature,omitempty"`
-		TopP        *float64 `json:"top_p,omitempty"`
-		TopK        *int     `json:"top_k,omitempty"`
-		Stop        []string `json:"stop,omitempty"`
-		Seed        *int     `json:"seed,omitempty"`
-		ToolChoice  any      `json:"tool_choice,omitempty"`
+		System          string                     `json:"system,omitempty"`
+		Messages        any                        `json:"messages,omitempty"`
+		Tools           any                        `json:"tools,omitempty"`
+		MaxTokens       int                        `json:"max_tokens,omitempty"`
+		Temperature     *float64                   `json:"temperature,omitempty"`
+		TopP            *float64                   `json:"top_p,omitempty"`
+		TopK            *int                       `json:"top_k,omitempty"`
+		Stop            []string                   `json:"stop,omitempty"`
+		Seed            *int                       `json:"seed,omitempty"`
+		ToolChoice      any                        `json:"tool_choice,omitempty"`
+		ResponseFormat  any                        `json:"response_format,omitempty"`
+		Reasoning       *ReasoningOptions          `json:"reasoning,omitempty"`
+		ProviderOptions []canonicalProviderOptions `json:"provider_options,omitempty"`
 		// Sorted header and metadata pairs
 		HeaderKeys   []string `json:"header_keys,omitempty"`
 		MetadataKeys []string `json:"metadata_keys,omitempty"`
 	}
 
 	co := canonicalOpts{
-		System:      opts.System,
-		Messages:    opts.Messages,
-		Tools:       opts.Tools,
-		MaxTokens:   opts.MaxTokens,
-		Temperature: opts.Temperature,
-		TopP:        opts.TopP,
-		TopK:        opts.TopK,
-		Stop:        opts.Stop,
-		Seed:        opts.Seed,
-		ToolChoice:  opts.ToolChoice,
+		System:         opts.System,
+		Messages:       opts.Messages,
+		Tools:          opts.Tools,
+		MaxTokens:      opts.MaxTokens,
+		Temperature:    opts.Temperature,
+		TopP:           opts.TopP,
+		TopK:           opts.TopK,
+		Stop:           opts.Stop,
+		Seed:           opts.Seed,
+		ToolChoice:     opts.ToolChoice,
+		ResponseFormat: opts.ResponseFormat,
+		Reasoning:      opts.Reasoning,
 	}
 
 	// Sort Headers keys for stable output.
@@ -627,6 +653,27 @@ func cacheKey(opts GenerateOptions) (string, error) {
 		sort.Strings(keys)
 		for _, k := range keys {
 			co.MetadataKeys = append(co.MetadataKeys, k+"="+opts.Metadata[k])
+		}
+	}
+	if len(opts.ProviderOptions) > 0 {
+		providers := make([]string, 0, len(opts.ProviderOptions))
+		for provider := range opts.ProviderOptions {
+			providers = append(providers, provider)
+		}
+		sort.Strings(providers)
+		for _, provider := range providers {
+			values := opts.ProviderOptions[provider]
+			entry := canonicalProviderOptions{Provider: provider, Values: map[string]string{}}
+			for key, value := range values {
+				entry.Keys = append(entry.Keys, key)
+				encoded, err := json.Marshal(value)
+				if err != nil {
+					return "", err
+				}
+				entry.Values[key] = string(encoded)
+			}
+			sort.Strings(entry.Keys)
+			co.ProviderOptions = append(co.ProviderOptions, entry)
 		}
 	}
 

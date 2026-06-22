@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"testing"
@@ -16,6 +17,56 @@ type fakeOpenAIModel struct {
 	lastOptions openai.GenerateOptions
 	result      *openai.GenerateResult
 	err         error
+}
+
+func TestOpenAIAdapterNeutralReasoningMapsToProviderOptions(t *testing.T) {
+	model := &fakeOpenAIModel{result: &openai.GenerateResult{FinishReason: openai.FinishReason{Unified: "stop"}}}
+	result, err := NewOpenAIAdapter(model).Generate(context.Background(), GenerateOptions{
+		ProviderOptions: llm.ProviderOptions{"openai": {"reasoningEffort": "low"}},
+		Reasoning:       &llm.ReasoningOptions{Effort: llm.ReasoningHigh},
+	})
+	if err != nil {
+		t.Fatalf("Generate error = %v", err)
+	}
+	if got := model.lastOptions.ProviderOptions["openai"]["reasoningEffort"]; got != "high" {
+		t.Fatalf("reasoningEffort = %#v, want high", got)
+	}
+	foundOverrideWarning := false
+	for _, warning := range result.Warnings {
+		if warning.Code == "reasoning_provider_option_overridden" {
+			foundOverrideWarning = true
+		}
+	}
+	if !foundOverrideWarning {
+		t.Fatalf("warnings = %#v, want override warning", result.Warnings)
+	}
+}
+
+func TestOpenAIAdapterNeutralReasoningBudgetUnsupported(t *testing.T) {
+	budget := 100
+	model := &fakeOpenAIModel{result: &openai.GenerateResult{FinishReason: openai.FinishReason{Unified: "stop"}}}
+	_, err := NewOpenAIAdapter(model).Generate(context.Background(), GenerateOptions{Reasoning: &llm.ReasoningOptions{Effort: llm.ReasoningHigh, BudgetTokens: &budget}})
+	var ufe *llm.UnsupportedFeatureError
+	if !errors.As(err, &ufe) || ufe.Feature != "reasoning_budget" {
+		t.Fatalf("error = %v, want UnsupportedFeatureError(reasoning_budget)", err)
+	}
+}
+
+func TestOpenAIAdapterNeutralReasoningXHighWarnDowngrades(t *testing.T) {
+	model := &fakeOpenAIModel{result: &openai.GenerateResult{FinishReason: openai.FinishReason{Unified: "stop"}}}
+	result, err := NewOpenAIAdapter(model).Generate(context.Background(), GenerateOptions{
+		Reasoning:                &llm.ReasoningOptions{Effort: llm.ReasoningXHigh},
+		UnsupportedFeaturePolicy: llm.UnsupportedFeaturePolicyWarn,
+	})
+	if err != nil {
+		t.Fatalf("Generate error = %v", err)
+	}
+	if got := model.lastOptions.ProviderOptions["openai"]["reasoningEffort"]; got != "high" {
+		t.Fatalf("reasoningEffort = %#v, want high", got)
+	}
+	if len(result.Warnings) == 0 || result.Warnings[0].Code != "reasoning_effort_downgraded" {
+		t.Fatalf("warnings = %#v, want downgrade warning", result.Warnings)
+	}
 }
 
 func (f *fakeOpenAIModel) ModelID() string                          { return "fake" }

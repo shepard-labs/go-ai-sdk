@@ -31,6 +31,7 @@ yet and should be treated as later work for this layer.
 | `toolkit` | Scoped file/shell tools driving a real agent loop that does on-disk work | `toolkit.Files`/`Shell`/`Tools`/`Merge`, `AgentLoop` |
 | `store` | Durable multi-turn runs: persist a transcript, resume from a fresh load | `store.RunStore`, `store/file`, `Client.Generate` |
 | `stream` | Token-by-token output; reasoning vs. answer deltas; finish/error contract | `Client.Stream`, the `StreamPart` union |
+| `reasoning` | Provider-neutral per-request reasoning/thinking effort | `GenerateOptions.Reasoning`, `ReasoningOptions` |
 | `failover` | Retrying against a fallback provider on a retryable error | `llm.WithFailover`, `llm.FailoverConfig` |
 | `cache` | Read-through response caching; identical calls skip the provider | `llm.WithCache`, `llm.CacheBackend` |
 | `vision` | Multimodal input — text + image in one message | `llm.ImageContent`, `llm.ImageURLSource` / `ImageInlineSource` |
@@ -54,6 +55,19 @@ application prefers a warning-backed fallback. Stream examples can be collected
 into a `GenerateResult` with `llm.CollectStream` when you need the same content,
 usage, warning, and metadata shape as non-streaming generation.
 
+Use `llm.GenerateOptions.Reasoning` for portable per-request reasoning/thinking
+control across supported providers:
+
+```go
+result, err := client.Generate(ctx, llm.GenerateOptions{
+    Messages: messages,
+    Reasoning: &llm.ReasoningOptions{Effort: llm.ReasoningHigh},
+})
+```
+
+Provider-specific knobs remain available through `ProviderOptions`, but neutral
+`Reasoning` wins when both are set.
+
 ## Running
 
 ```bash
@@ -62,6 +76,7 @@ go run ./examples/llm/schema
 go run ./examples/llm/toolkit
 go run ./examples/llm/store
 go run ./examples/llm/stream
+go run ./examples/llm/reasoning
 go run ./examples/llm/failover
 go run ./examples/llm/cache
 go run ./examples/llm/vision

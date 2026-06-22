@@ -222,6 +222,45 @@ func TestAnthropicUnsupportedFeatureWarnPolicy(t *testing.T) {
 	}
 }
 
+func TestAnthropicNeutralReasoningMapsToThinking(t *testing.T) {
+	budget := 1234
+	cases := []struct {
+		name       string
+		reasoning  *llm.ReasoningOptions
+		wantType   anthropic.ThinkingType
+		wantBudget int
+	}{
+		{"none", &llm.ReasoningOptions{Effort: llm.ReasoningNone}, anthropic.ThinkingTypeDisabled, 0},
+		{"high", &llm.ReasoningOptions{Effort: llm.ReasoningHigh}, anthropic.ThinkingTypeEnabled, 8192},
+		{"exact_budget", &llm.ReasoningOptions{BudgetTokens: &budget}, anthropic.ThinkingTypeEnabled, budget},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model := &fakeAnthropicModel{result: &anthropic.GenerateResult{FinishReason: anthropic.FinishReasonStop}}
+			_, err := NewAnthropicAdapter(model).Generate(context.Background(), GenerateOptions{Reasoning: tc.reasoning})
+			if err != nil {
+				t.Fatalf("Generate error = %v", err)
+			}
+			if model.lastOptions.Thinking == nil {
+				t.Fatal("Thinking = nil")
+			}
+			if model.lastOptions.Thinking.Type != tc.wantType || model.lastOptions.Thinking.BudgetTokens != tc.wantBudget {
+				t.Fatalf("Thinking = %#v, want type %q budget %d", model.lastOptions.Thinking, tc.wantType, tc.wantBudget)
+			}
+		})
+	}
+}
+
+func TestAnthropicNeutralReasoningValidation(t *testing.T) {
+	budget := 1
+	model := &fakeAnthropicModel{result: &anthropic.GenerateResult{FinishReason: anthropic.FinishReasonStop}}
+	_, err := NewAnthropicAdapter(model).Generate(context.Background(), GenerateOptions{Reasoning: &llm.ReasoningOptions{Effort: llm.ReasoningNone, BudgetTokens: &budget}})
+	var ufe *llm.UnsupportedFeatureError
+	if !errors.As(err, &ufe) || ufe.Feature != "reasoning_budget" {
+		t.Fatalf("error = %v, want UnsupportedFeatureError(reasoning_budget)", err)
+	}
+}
+
 func TestAnthropicResponseMetadata(t *testing.T) {
 	model := &fakeAnthropicModel{result: &anthropic.GenerateResult{
 		FinishReason:    anthropic.FinishReasonStop,
