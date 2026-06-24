@@ -13,6 +13,15 @@ require (
 	github.com/shepard-labs/go-clients/storage v1.0.2
 )
 
+replace (
+	github.com/shepard-labs/go-ai-sdk/anthropic => ./anthropic
+	github.com/shepard-labs/go-ai-sdk/cohere => ./cohere
+	github.com/shepard-labs/go-ai-sdk/google => ./google
+	github.com/shepard-labs/go-ai-sdk/openai => ./openai
+	github.com/shepard-labs/go-ai-sdk/openaicompatible => ./openaicompatible
+	github.com/shepard-labs/go-ai-sdk/openrouter => ./openrouter
+)
+
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
