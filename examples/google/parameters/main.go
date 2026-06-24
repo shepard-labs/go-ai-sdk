@@ -18,7 +18,7 @@ func main() {
 		log.Fatalf("Error creating provider: %v", err)
 	}
 
-	model := provider.Model(google.ModelGemini25Flash)
+	model := provider.Model(google.ModelGemini35Flash)
 
 	temperature := 0.2
 	topP := 0.9
@@ -31,13 +31,12 @@ func main() {
 				google.TextContent{Text: "Write three concise product names for a Go SDK. End with END."},
 			}},
 		},
-		MaxOutputTokens:  intPtr(150),
-		Temperature:      &temperature,
-		TopP:             &topP,
-		TopK:             &topK,
-		Seed:             &seed,
-		StopSequences:    []string{"END"},
-		FrequencyPenalty: floatPtr(0.5),
+		MaxOutputTokens: intPtr(500),
+		Temperature:     &temperature,
+		TopP:            &topP,
+		TopK:            &topK,
+		Seed:            &seed,
+		StopSequences:   []string{"END"},
 	})
 	if err != nil {
 		log.Fatalf("Error generating response: %v", err)
@@ -55,5 +54,4 @@ func printText(contents []google.Content) {
 	}
 }
 
-func intPtr(v int) *int           { return &v }
-func floatPtr(v float64) *float64 { return &v }
+func intPtr(v int) *int { return &v }

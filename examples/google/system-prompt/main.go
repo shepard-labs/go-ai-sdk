@@ -18,7 +18,7 @@ func main() {
 		log.Fatalf("Error creating provider: %v", err)
 	}
 
-	model := provider.Model(google.ModelGemini25Flash)
+	model := provider.Model(google.ModelGemini35Flash)
 	result, err := model.DoGenerate(context.Background(), google.GenerateOptions{
 		Messages: []google.Message{
 			google.SystemMessage{
@@ -28,7 +28,6 @@ func main() {
 				google.TextContent{Text: "Explain when to use context.Context in HTTP clients."},
 			}},
 		},
-		MaxOutputTokens: intPtr(250),
 	})
 	if err != nil {
 		log.Fatalf("Error generating response: %v", err)
@@ -44,5 +43,3 @@ func printText(contents []google.Content) {
 		}
 	}
 }
-
-func intPtr(v int) *int { return &v }

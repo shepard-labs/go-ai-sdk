@@ -36,14 +36,14 @@ func main() {
 		log.Fatalf("Error creating provider: %v", err)
 	}
 
-	model := provider.Model(google.ModelGemini25Flash)
+	model := provider.Model(google.ModelGemini35Flash)
 	result, err := model.DoGenerate(context.Background(), google.GenerateOptions{
 		Messages: []google.Message{
 			google.UserMessage{Content: []google.UserContent{
 				google.TextContent{Text: "Reply with one sentence about custom client settings."},
 			}},
 		},
-		MaxOutputTokens: intPtr(100),
+		MaxOutputTokens: intPtr(1000),
 	})
 	if err != nil {
 		log.Fatalf("Error generating response: %v", err)

@@ -18,7 +18,7 @@ func main() {
 		log.Fatalf("Error creating provider: %v", err)
 	}
 
-	model := provider.EmbeddingModel(google.ModelGeminiEmbedding001)
+	model := provider.EmbeddingModel(google.ModelGeminiEmbedding2Preview)
 
 	texts := []string{
 		"Go is a statically typed, compiled programming language.",

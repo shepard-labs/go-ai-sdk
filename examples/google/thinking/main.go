@@ -21,8 +21,7 @@ func main() {
 	// Enable thinking via ProviderOptions["google"].thinkingConfig.
 	// includeThoughts = true makes the model return reasoning content blocks.
 	includeThoughts := true
-	thinkingBudget := 1024
-	model := provider.Model(google.ModelGemini25Flash)
+	model := provider.Model(google.ModelGemini35Flash)
 	result, err := model.DoGenerate(context.Background(), google.GenerateOptions{
 		Messages: []google.Message{
 			google.UserMessage{Content: []google.UserContent{
@@ -34,7 +33,7 @@ func main() {
 			"google": {
 				"thinkingConfig": map[string]any{
 					"includeThoughts": includeThoughts,
-					"thinkingBudget":  thinkingBudget,
+					"thinkingLevel":   "medium",
 				},
 			},
 		},

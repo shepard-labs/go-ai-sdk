@@ -18,7 +18,7 @@ func main() {
 		log.Fatalf("Error creating provider: %v", err)
 	}
 
-	model := provider.Model(google.ModelGemini25Flash)
+	model := provider.Model(google.ModelGemini35Flash)
 
 	schema := map[string]any{
 		"type": "object",
@@ -52,7 +52,6 @@ func main() {
 			Description: "A structured summary for backend engineering notes.",
 			Schema:      schema,
 		},
-		MaxOutputTokens: intPtr(300),
 	})
 	if err != nil {
 		log.Fatalf("Error generating response: %v", err)

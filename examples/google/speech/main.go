@@ -19,7 +19,7 @@ func main() {
 		log.Fatalf("Error creating provider: %v", err)
 	}
 
-	model := provider.SpeechModel(google.ModelGemini25FlashPreviewTTS)
+	model := provider.SpeechModel(google.ModelGemini31FlashTTSPreview)
 
 	result, err := model.DoGenerate(context.Background(), google.SpeechGenerateOptions{
 		Text:         "Hello! Welcome to the Google Generative AI speech synthesis example.",

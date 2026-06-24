@@ -19,7 +19,7 @@ func main() {
 		log.Fatalf("Error creating provider: %v", err)
 	}
 
-	model := provider.Model(google.ModelGemini25Flash)
+	model := provider.Model(google.ModelGemini35Flash)
 
 	// Define a custom tool for getting the weather.
 	weatherTool := google.Tool{
@@ -39,7 +39,7 @@ func main() {
 
 	messages := []google.Message{
 		google.UserMessage{Content: []google.UserContent{
-			google.TextContent{Text: "What is the weather like in Seattle, WA right now?"},
+			google.TextContent{Text: "What is the weather like in San Francisco, CA right now?"},
 		}},
 	}
 

@@ -19,7 +19,7 @@ func main() {
 		log.Fatalf("Error creating provider: %v", err)
 	}
 
-	model := provider.Model(google.ModelGemini25Flash)
+	model := provider.Model(google.ModelGemini35Flash)
 
 	fmt.Println("Sending streaming request to Gemini...")
 
@@ -30,7 +30,7 @@ func main() {
 					google.TextContent{Text: "Write a short story about a robot learning to paint, stream the response."},
 				}},
 			},
-			MaxOutputTokens: intPtr(300),
+			MaxOutputTokens: intPtr(3000),
 		},
 	})
 	if err != nil {

@@ -18,18 +18,17 @@ func main() {
 		log.Fatalf("Error creating provider: %v", err)
 	}
 
-	model := provider.Model(google.ModelGemini25Flash)
+	model := provider.Model(google.ModelGemini35Flash)
 	result, err := model.DoGenerate(context.Background(), google.GenerateOptions{
 		Messages: []google.Message{
 			google.UserMessage{Content: []google.UserContent{
 				google.TextContent{Text: "Describe this image in one short paragraph."},
 				google.ImageContent{Source: google.ImageSource{
 					Type: "url",
-					URL:  "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/320px-Camponotus_flavomarginatus_ant.jpg",
+					URL:  "https://images.unsplash.com/photo-1780476895954-b934fb2e480b",
 				}},
 			}},
 		},
-		MaxOutputTokens: intPtr(200),
 	})
 	if err != nil {
 		log.Fatalf("Error generating response: %v", err)

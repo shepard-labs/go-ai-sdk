@@ -20,10 +20,7 @@ func main() {
 		log.Fatalf("Error creating provider: %v", err)
 	}
 
-	// Imagen returns base64-encoded PNG bytes; for Gemini image models the
-	// response is also base64-encoded inline data.
-	model := provider.ImageModel(google.ModelImagen4Generate)
-
+	model := provider.ImageModel(google.ModelGemini31FlashImage)
 	result, err := model.DoGenerate(context.Background(), google.ImageGenerateOptions{
 		Prompt:      "A serene mountain lake at sunrise, photorealistic, 4K",
 		N:           1,

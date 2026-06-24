@@ -25,7 +25,7 @@ func main() {
 	// search backend itself and returns the answer with grounding sources.
 	searchTool := provider.Tools().GoogleSearch()
 
-	model := provider.Model(google.ModelGemini25Flash)
+	model := provider.Model(google.ModelGemini31ProPreview)
 	result, err := model.DoGenerate(context.Background(), google.GenerateOptions{
 		Messages: []google.Message{
 			google.UserMessage{Content: []google.UserContent{
@@ -33,7 +33,7 @@ func main() {
 			}},
 		},
 		Tools:           []google.Tool{searchTool},
-		MaxOutputTokens: intPtr(400),
+		MaxOutputTokens: intPtr(1000),
 	})
 	if err != nil {
 		log.Fatalf("Error generating response: %v", err)
