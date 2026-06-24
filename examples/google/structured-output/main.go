@@ -67,5 +67,3 @@ func printText(contents []google.Content) {
 		}
 	}
 }
-
-func intPtr(v int) *int { return &v }
