@@ -14,7 +14,7 @@ func TestConvertPrompt_SystemHoisted(t *testing.T) {
 			UserMessage{Content: []UserContent{TextContent{Text: "hello"}}},
 		},
 	}
-	contents, system, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, system, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestConvertPrompt_SystemAfterUser_Errors(t *testing.T) {
 			SystemMessage{Content: "nope"},
 		},
 	}
-	_, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	_, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -86,7 +86,7 @@ func TestConvertPrompt_ImageData(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestConvertPrompt_ImageURL(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestConvertPrompt_Audio(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestConvertPrompt_VideoURL(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestConvertPrompt_FileBytes(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestConvertPrompt_FileURLString(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestConvertPrompt_Reasoning(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestConvertPrompt_ToolCallSignatureRoundtrip(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestConvertPrompt_FunctionResponse_Legacy(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestConvertPrompt_AssistantToolResult_Dropped(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestConvertPrompt_ExecutableCode(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestConvertPrompt_VertexNamespace_Fallback(t *testing.T) {
 		},
 	}
 	// When not vertex-like, vertex options are ignored.
-	_, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	_, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestConvertPrompt_VertexNamespace_Fallback(t *testing.T) {
 }
 
 func TestConvertPrompt_EmptyMessages(t *testing.T) {
-	contents, system, _, err := ConvertPrompt(ModelGemini25Flash, GenerateOptions{Messages: nil})
+	contents, system, _, err := ConvertPrompt(ModelGemini35Flash, GenerateOptions{Messages: nil})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestConvertPrompt_AllUserContent(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -91,7 +91,7 @@ func TestDoGenerate_TextOnly(t *testing.T) {
 			}
 		}`, userText))
 	}))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, err := lm.DoGenerate(context.Background(), GenerateOptions{
 		Messages: []Message{
 			UserMessage{Content: []UserContent{TextContent{Text: "hi"}}},
@@ -124,7 +124,7 @@ func TestDoGenerate_StopWithToolCalls_ReportsToolCalls(t *testing.T) {
 			}]
 		}`)
 	}))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, err := lm.DoGenerate(context.Background(), GenerateOptions{
 		Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "weather?"}}}},
 	})
@@ -179,7 +179,7 @@ func TestDoGenerate_UsageWithThoughts(t *testing.T) {
 			}
 		}`)
 	}))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, err := lm.DoGenerate(context.Background(), GenerateOptions{
 		Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}},
 	})
@@ -204,7 +204,7 @@ func TestDoGenerate_UsageWithThoughts(t *testing.T) {
 
 func TestBuildChatRequest_Passthrough(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	args := getArgsResult{
 		Options: GoogleOptions{},
 		Passthrough: map[string]any{
@@ -226,7 +226,7 @@ func TestBuildChatRequest_Passthrough(t *testing.T) {
 
 func TestBuildChatRequest_ResponseFormatJSON_Schema(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	schema := map[string]any{
 		"type":       "object",
 		"properties": map[string]any{"x": map[string]any{"type": "string"}},
@@ -262,7 +262,7 @@ func TestBuildChatRequest_ResponseFormatJSON_Schema(t *testing.T) {
 
 func TestBuildChatRequest_ThinkingBudget_Gemini25(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	budget := 2048
 	args := getArgsResult{Options: GoogleOptions{
 		ThinkingConfig: &ThinkingConfig{ThinkingBudget: &budget},
@@ -312,7 +312,7 @@ func TestBuildChatRequest_Reasoning_NoneOnGemini3(t *testing.T) {
 
 func TestBuildChatRequest_SafetySettings_ThresholdDefault(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	opts := GenerateOptions{
 		ProviderOptions: ProviderOptions{
 			"google": map[string]any{
@@ -345,7 +345,7 @@ func TestBuildChatRequest_SafetySettings_ThresholdDefault(t *testing.T) {
 
 func TestBuildChatRequest_ImageConfig(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	args := getArgsResult{Options: GoogleOptions{
 		ImageConfig: &ImageConfig{AspectRatio: "16:9", ImageSize: "1K"},
 	}}
@@ -367,7 +367,7 @@ func TestBuildChatRequest_ImageConfig(t *testing.T) {
 
 func TestBuildChatRequest_CachedContent(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	args := getArgsResult{Options: GoogleOptions{CachedContent: "cachedContents/abc"}}
 	opts := GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "x"}}}}}
 	contents, system, _, _ := ConvertPrompt(lm.modelID, opts)
@@ -380,7 +380,7 @@ func TestBuildChatRequest_CachedContent(t *testing.T) {
 func TestBuildChatRequest_ServiceTier_OmittedOnVertex(t *testing.T) {
 	p := newTestProvider(t, nil)
 	p.isVertex = true
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	args := getArgsResult{Options: GoogleOptions{ServiceTier: "flex"}, IsVertex: true}
 	opts := GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "x"}}}}}
 	contents, system, _, _ := ConvertPrompt(lm.modelID, opts)
@@ -392,7 +392,7 @@ func TestBuildChatRequest_ServiceTier_OmittedOnVertex(t *testing.T) {
 
 func TestBuildChatRequest_ServiceTier_PresentOnGemini(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	args := getArgsResult{Options: GoogleOptions{ServiceTier: "flex"}, IsVertex: false}
 	opts := GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "x"}}}}}
 	contents, system, _, _ := ConvertPrompt(lm.modelID, opts)
@@ -405,7 +405,7 @@ func TestBuildChatRequest_ServiceTier_PresentOnGemini(t *testing.T) {
 func TestBuildChatRequest_VertexHeaders(t *testing.T) {
 	p := newTestProvider(t, nil)
 	p.isVertex = true
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	args := getArgsResult{
 		Options:  GoogleOptions{SharedRequestType: "dedicated", RequestType: "shared"},
 		IsVertex: true,
@@ -423,7 +423,7 @@ func TestBuildChatRequest_VertexHeaders(t *testing.T) {
 
 func TestBuildChatRequest_VertexHeaders_NonVertex_Warning(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	opts := GenerateOptions{
 		ProviderOptions: ProviderOptions{
 			"google": map[string]any{
@@ -451,7 +451,7 @@ func TestBuildChatRequest_VertexHeaders_NonVertex_Warning(t *testing.T) {
 
 func TestBuildChatRequest_ToolChoice(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	tool := Tool{Type: "function", Name: "f"}
 	opts := GenerateOptions{
 		Tools:      []Tool{tool},
@@ -473,7 +473,7 @@ func TestBuildChatRequest_ToolChoice(t *testing.T) {
 
 func TestBuildChatRequest_ToolChoice_ToolName(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	tool := Tool{Type: "function", Name: "f"}
 	opts := GenerateOptions{
 		Tools:      []Tool{tool},
@@ -513,38 +513,11 @@ func TestBuildChatRequest_MixedTools_Gemini3_IncludeServerSide(t *testing.T) {
 	}
 }
 
-func TestBuildChatRequest_MixedTools_PreGemini3_Warning(t *testing.T) {
-	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
-	opts := GenerateOptions{
-		Tools: []Tool{
-			{Type: "provider", ID: "google.google_search", Name: "google_search"},
-			{Type: "function", Name: "f"},
-		},
-		Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "x"}}}},
-	}
-	args, _ := lm.getArgs(opts)
-	contents, system, _, _ := ConvertPrompt(lm.modelID, opts)
-	_, _, warnings, err := lm.buildChatRequest(args, opts, contents, system)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, w := range warnings {
-		if w.Feature == "mixed function and provider tools on pre-Gemini-3 models" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected mixed-tools unsupported warning, got %+v", warnings)
-	}
-}
-
 // ---- parseGenerateResponse tests ----
 
 func TestParseGenerateResponse_UnknownPart(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	body := []byte(`{
 		"candidates": [{
 			"index": 0,
@@ -577,7 +550,7 @@ func TestParseGenerateResponse_UnknownPart(t *testing.T) {
 
 func TestParseGenerateResponse_GroundingSources(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	body := []byte(`{
 		"candidates": [{
 			"index": 0,
@@ -625,7 +598,7 @@ func TestParseGenerateResponse_GroundingSources(t *testing.T) {
 
 func TestParseGenerateResponse_PromptFeedback(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	body := []byte(`{
 		"candidates": [{
 			"index": 0,
@@ -682,7 +655,7 @@ func TestParseGenerateResponse_ServerToolCall(t *testing.T) {
 
 func TestParseGenerateResponse_CodeExecutionPair(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	body := []byte(`{
 		"candidates": [{
 			"index": 0,
@@ -710,7 +683,7 @@ func TestParseGenerateResponse_CodeExecutionPair(t *testing.T) {
 
 func TestParseGenerateResponse_InlineDataAndFileData(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	body := []byte(`{
 		"candidates": [{
 			"index": 0,
@@ -738,7 +711,7 @@ func TestParseGenerateResponse_InlineDataAndFileData(t *testing.T) {
 
 func TestParseGenerateResponse_FunctionCallWithArgs(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	body := []byte(`{
 		"candidates": [{
 			"index": 0,
@@ -763,7 +736,7 @@ func TestParseGenerateResponse_FunctionCallWithArgs(t *testing.T) {
 
 func TestParseGenerateResponse_EmptyCandidates(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	body := []byte(`{"candidates": []}`)
 	res, _, err := lm.parseGenerateResponse(body, nil, http.Header{})
 	if err != nil {
@@ -784,7 +757,7 @@ func TestConvertPrompt_Reasoning_ThoughtTrue(t *testing.T) {
 			}},
 		},
 	}
-	contents, _, _, err := ConvertPrompt(ModelGemini25Flash, opts)
+	contents, _, _, err := ConvertPrompt(ModelGemini35Flash, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -799,7 +772,7 @@ func TestConvertPrompt_Reasoning_ThoughtTrue(t *testing.T) {
 
 func TestParseGenerateResponse_ReasoningFromWire(t *testing.T) {
 	p := newTestProvider(t, nil)
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	body := []byte(`{
 		"candidates": [{
 			"index": 0,
@@ -835,7 +808,7 @@ func TestGetArgs_VertexNamespace(t *testing.T) {
 	p := newTestProvider(t, nil)
 	p.isVertex = true
 	p.useVertexAIHeaders = true
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	opts := GenerateOptions{
 		ProviderOptions: ProviderOptions{
 			"googleVertex": map[string]any{"responseModalities": []any{"TEXT"}},
@@ -910,11 +883,6 @@ func TestMapReasoningForModel(t *testing.T) {
 	if g3none.ThinkingLevel != "minimal" {
 		t.Errorf("g3 none: %+v, want minimal", g3none)
 	}
-	// Gemini 2.5 uses thinkingBudget.
-	g25 := mapReasoningForModel(ModelGemini25Flash, "none", nil, nil)
-	if g25.ThinkingBudget == nil || *g25.ThinkingBudget != 0 {
-		t.Errorf("g25 none: %+v, want budget=0", g25)
-	}
 }
 
 // ---- public request body verification ----
@@ -927,7 +895,7 @@ func TestDoGenerate_EndToEnd_BodyShape(t *testing.T) {
 			"candidates": [{"index": 0, "content": {"role": "model", "parts": [{"text": "x"}]}, "finishReason": "STOP"}]
 		}`)
 	}))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	_, err := lm.DoGenerate(context.Background(), GenerateOptions{
 		Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}},
 	})

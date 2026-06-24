@@ -48,7 +48,7 @@ func TestDoStream_TextOnly(t *testing.T) {
 		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":" world"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}`,
 	}
 	p := newTestProvider(t, newSSEHandler(t, chunks))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, err := lm.DoStream(context.Background(), StreamOptions{
 		GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}}},
 	})
@@ -81,7 +81,7 @@ func TestDoStream_Reasoning(t *testing.T) {
 		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"thinking...","thought":true},{"text":"answer"}]},"finishReason":"STOP"}]}`,
 	}
 	p := newTestProvider(t, newSSEHandler(t, chunks))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, err := lm.DoStream(context.Background(), StreamOptions{
 		GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}},
 	})
@@ -119,7 +119,7 @@ func TestDoStream_CodeExecution(t *testing.T) {
 		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"codeExecutionResult":{"outcome":"OUTCOME_OK","output":"1"}}]},"finishReason":"STOP"}]}`,
 	}
 	p := newTestProvider(t, newSSEHandler(t, chunks))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, err := lm.DoStream(context.Background(), StreamOptions{
 		GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}},
 	})
@@ -163,7 +163,7 @@ func TestDoStream_FunctionCall_StreamingChunk(t *testing.T) {
 		`{"candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}`,
 	}
 	p := newTestProvider(t, newSSEHandler(t, chunks))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, err := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
 	if err != nil {
 		t.Fatalf("DoStream: %v", err)
@@ -197,7 +197,7 @@ func TestDoStream_FunctionCall_Complete(t *testing.T) {
 		`{"candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}`,
 	}
 	p := newTestProvider(t, newSSEHandler(t, chunks))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, _ := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
 	parts := collectStream(t, res.Stream, 2*time.Second)
 	var sawStart, sawDelta, sawEnd, sawCall bool
@@ -224,7 +224,7 @@ func TestDoStream_FunctionCall_NoArgs(t *testing.T) {
 		`{"candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}`,
 	}
 	p := newTestProvider(t, newSSEHandler(t, chunks))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, _ := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
 	parts := collectStream(t, res.Stream, 2*time.Second)
 	var sawStart, sawEnd, sawCall bool
@@ -259,7 +259,7 @@ func TestDoStream_ServerToolCall(t *testing.T) {
 		`{"candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}`,
 	}
 	p := newTestProvider(t, newSSEHandler(t, chunks))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, _ := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
 	parts := collectStream(t, res.Stream, 2*time.Second)
 	var call *StreamToolCall
@@ -294,7 +294,7 @@ func TestDoStream_Sources(t *testing.T) {
 		`{"candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}`,
 	}
 	p := newTestProvider(t, newSSEHandler(t, chunks))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, _ := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
 	parts := collectStream(t, res.Stream, 2*time.Second)
 	urls := map[string]int{}
@@ -314,7 +314,7 @@ func TestDoStream_Sources(t *testing.T) {
 func TestDoStream_StreamRaw(t *testing.T) {
 	raw := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP"}]}`
 	p := newTestProvider(t, newSSEHandler(t, []string{raw}))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, _ := lm.DoStream(context.Background(), StreamOptions{
 		IncludeRawChunks: true,
 		GenerateOptions:  GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}},
@@ -341,7 +341,7 @@ func TestDoStream_AbortDuringStream(t *testing.T) {
 	p := newTestProvider(t, newSSEHandler(t, []string{
 		`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"hi"}]}}]}`,
 	}))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	ctx, cancel := context.WithCancel(context.Background())
 	res, _ := lm.DoStream(ctx, StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
 	cancel()
@@ -363,7 +363,7 @@ func TestDoStream_MalformedSSE(t *testing.T) {
 			flusher.Flush()
 		}
 	}))
-	lm := &googleLanguageModel{provider: p, modelID: ModelGemini25Flash}
+	lm := &googleLanguageModel{provider: p, modelID: ModelGemini35Flash}
 	res, _ := lm.DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "q"}}}}}})
 	parts := collectStream(t, res.Stream, 2*time.Second)
 	var finish *StreamFinish
