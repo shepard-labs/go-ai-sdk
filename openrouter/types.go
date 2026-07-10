@@ -313,24 +313,34 @@ type EmbedResult struct {
 type EmbeddingUsage struct{ Tokens int }
 
 type ImageGenerateOptions struct {
-	Prompt          string
-	N               int
-	Size            string
-	AspectRatio     string
-	Seed            *int
-	InputFiles      []FileContent
-	Mask            *FileContent
-	Headers         http.Header
-	ProviderOptions ProviderOptions
+	Prompt            string
+	N                 int
+	Size              string
+	AspectRatio       string
+	Quality           string
+	Background        string
+	OutputCompression *int
+	Seed              *int
+	InputFiles        []FileContent
+	Mask              *FileContent
+	Headers           http.Header
+	ProviderOptions   ProviderOptions
 }
 
 type ImageGenerateResult struct {
 	Images           []string
+	ImageData        []ImageData
 	Warnings         []Warning
 	ProviderMetadata ProviderMetadata
 	Usage            *ImageUsage
 	Request          RequestMetadata
 	Response         ImageResponseMetadata
+}
+
+// ImageData contains an encoded generated image and its reported media type.
+type ImageData struct {
+	Base64    string
+	MediaType string
 }
 
 type ImageUsage struct {

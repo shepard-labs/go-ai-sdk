@@ -22,29 +22,24 @@ func (m *imageModel) DoGenerate(ctx context.Context, opts ImageGenerateOptions) 
 	if opts.Mask != nil {
 		return nil, UnsupportedFunctionalityError{Message: "OpenRouter image generation does not support masks"}
 	}
-	warnings := []Warning{}
-	if opts.N > 1 {
-		warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "OpenRouter returns one image per image generation call"})
+	body := map[string]any{"model": m.modelID, "prompt": opts.Prompt}
+	if opts.N > 0 {
+		body["n"] = opts.N
 	}
 	if opts.Size != "" {
-		warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "Use AspectRatio for OpenRouter image sizing"})
+		body["size"] = opts.Size
 	}
-	var content any = opts.Prompt
-	if len(opts.InputFiles) > 0 {
-		parts := make([]apiPart, 0, len(opts.InputFiles)+1)
-		for _, f := range opts.InputFiles {
-			p, err := imageInputPart(f)
-			if err != nil {
-				return nil, err
-			}
-			parts = append(parts, p)
-		}
-		parts = append(parts, apiPart{Type: "text", Text: opts.Prompt})
-		content = parts
-	}
-	body := map[string]any{"model": m.modelID, "messages": []map[string]any{{"role": "user", "content": content}}, "modalities": []string{"image", "text"}}
 	if opts.AspectRatio != "" {
-		body["image_config"] = map[string]any{"aspect_ratio": opts.AspectRatio}
+		body["aspect_ratio"] = opts.AspectRatio
+	}
+	if opts.Quality != "" {
+		body["quality"] = opts.Quality
+	}
+	if opts.Background != "" {
+		body["background"] = opts.Background
+	}
+	if opts.OutputCompression != nil {
+		body["output_compression"] = *opts.OutputCompression
 	}
 	if opts.Seed != nil {
 		body["seed"] = *opts.Seed
@@ -55,31 +50,52 @@ func (m *imageModel) DoGenerate(ctx context.Context, opts ImageGenerateOptions) 
 	if m.options.Provider != nil {
 		body["provider"] = m.options.Provider
 	}
+	if len(opts.InputFiles) > 0 {
+		references := make([]map[string]any, 0, len(opts.InputFiles))
+		for _, f := range opts.InputFiles {
+			reference, err := imageInputReference(f)
+			if err != nil {
+				return nil, err
+			}
+			references = append(references, reference)
+		}
+		body["input_references"] = references
+	}
 	mergeBody(body, m.provider.extraBody)
 	mergeBody(body, m.options.ExtraBody)
 	mergeOpenRouterOptions(body, opts.ProviderOptions)
-	var resp chatResponse
-	_, h, err := m.provider.postJSON(ctx, "/chat/completions", body, opts.Headers, &resp)
+	var resp imageResponse
+	_, h, err := m.provider.postJSONOnce(ctx, "/images", body, opts.Headers, &resp)
 	if err != nil {
 		return nil, err
 	}
-	if len(resp.Choices) == 0 {
-		return nil, NoContentGeneratedError{Message: "OpenRouter returned no image choices"}
+	if len(resp.Data) == 0 {
+		return nil, NoContentGeneratedError{Message: "OpenRouter returned no images"}
 	}
 	images := []string{}
-	for _, img := range resp.Choices[0].Message.Images {
-		_, data := dataURLParts(img.ImageURL.URL, "image/jpeg")
-		images = append(images, data)
+	imageData := make([]ImageData, 0, len(resp.Data))
+	for _, img := range resp.Data {
+		if strings.TrimSpace(img.Base64) == "" {
+			continue
+		}
+		images = append(images, img.Base64)
+		imageData = append(imageData, ImageData{Base64: img.Base64, MediaType: img.MediaType})
+	}
+	if len(images) == 0 {
+		return nil, NoContentGeneratedError{Message: "OpenRouter returned no usable images"}
 	}
 	rb, _ := json.Marshal(body)
 	var usage *ImageUsage
+	cost := 0.0
 	if resp.Usage != nil {
 		usage = &ImageUsage{InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens, TotalTokens: resp.Usage.TotalTokens}
+		cost = resp.Usage.Cost
 	}
-	return &ImageGenerateResult{Images: images, Warnings: warnings, Usage: usage, Request: RequestMetadata{Body: rb}, Response: ImageResponseMetadata{ID: resp.ID, ModelID: resp.Model, Headers: h, Timestamp: time.Now()}}, nil
+	metadata := ProviderMetadata{"openrouter": map[string]any{"created": resp.Created, "cost": cost}}
+	return &ImageGenerateResult{Images: images, ImageData: imageData, Usage: usage, ProviderMetadata: metadata, Request: RequestMetadata{Body: rb}, Response: ImageResponseMetadata{ID: resp.ID, ModelID: resp.Model, Headers: h, Timestamp: time.Now()}}, nil
 }
 
-func imageInputPart(f FileContent) (apiPart, error) {
+func imageInputReference(f FileContent) (map[string]any, error) {
 	url, media := fileURL(f)
 	if !strings.HasPrefix(url, "data:") && !strings.HasPrefix(url, "http") {
 		if b, ok := f.Data.([]byte); ok {
@@ -89,5 +105,21 @@ func imageInputPart(f FileContent) (apiPart, error) {
 			url = "data:" + media + ";base64," + base64.StdEncoding.EncodeToString(b)
 		}
 	}
-	return apiPart{Type: "image_url", ImageURL: &apiURLPayload{URL: url}}, nil
+	return map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}}, nil
+}
+
+type imageResponse struct {
+	ID      string `json:"id"`
+	Model   string `json:"model"`
+	Created int64  `json:"created"`
+	Data    []struct {
+		Base64    string `json:"b64_json"`
+		MediaType string `json:"media_type"`
+	} `json:"data"`
+	Usage *struct {
+		PromptTokens     int     `json:"prompt_tokens"`
+		CompletionTokens int     `json:"completion_tokens"`
+		TotalTokens      int     `json:"total_tokens"`
+		Cost             float64 `json:"cost"`
+	} `json:"usage"`
 }

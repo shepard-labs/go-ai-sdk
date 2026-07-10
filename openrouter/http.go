@@ -81,14 +81,26 @@ func (p *openRouterProvider) postJSON(ctx context.Context, path string, body map
 	return p.doJSON(ctx, http.MethodPost, path, requestBody, headers, out)
 }
 
+func (p *openRouterProvider) postJSONOnce(ctx context.Context, path string, body map[string]any, headers http.Header, out any) ([]byte, http.Header, error) {
+	requestBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, nil, err
+	}
+	return p.doJSONAttempts(ctx, http.MethodPost, path, requestBody, headers, out, 0)
+}
+
 func (p *openRouterProvider) getJSON(ctx context.Context, path string, headers http.Header, out any) ([]byte, http.Header, error) {
 	return p.doJSON(ctx, http.MethodGet, path, nil, headers, out)
 }
 
 func (p *openRouterProvider) doJSON(ctx context.Context, method, path string, body []byte, headers http.Header, out any) ([]byte, http.Header, error) {
+	return p.doJSONAttempts(ctx, method, path, body, headers, out, p.retry.MaxRetries)
+}
+
+func (p *openRouterProvider) doJSONAttempts(ctx context.Context, method, path string, body []byte, headers http.Header, out any, maxRetries int) ([]byte, http.Header, error) {
 	var lastErr error
 	var lastResp *http.Response
-	for attempt := 0; attempt <= p.retry.MaxRetries; attempt++ {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := p.retryDelay(attempt-1, lastResp)
 			select {
@@ -113,7 +125,7 @@ func (p *openRouterProvider) doJSON(ctx context.Context, method, path string, bo
 		lastResp = resp
 		if err != nil {
 			lastErr = err
-			if attempt < p.retry.MaxRetries {
+			if attempt < maxRetries {
 				continue
 			}
 			return nil, nil, &APICallError{Message: err.Error(), Retryable: true, Cause: err}
@@ -126,7 +138,7 @@ func (p *openRouterProvider) doJSON(ctx context.Context, method, path string, bo
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			err := parseAPIError(resp.StatusCode, raw)
 			err.Retryable = retryableStatus(resp.StatusCode)
-			if err.Retryable && attempt < p.retry.MaxRetries {
+			if err.Retryable && attempt < maxRetries {
 				lastErr = err
 				continue
 			}

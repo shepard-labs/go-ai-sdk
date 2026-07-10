@@ -189,10 +189,10 @@ func TestCompletionEmbeddingImageAndVideo(t *testing.T) {
 			}
 			return jsonResp(200, `{"model":"e","provider":"p","data":[{"embedding":[2],"index":1},{"embedding":[1],"index":0}],"usage":{"prompt_tokens":2}}`), nil
 		case 3:
-			if req.URL.Path != "/api/v1/chat/completions" || body["modalities"] == nil {
+			if req.URL.Path != "/api/v1/images" || body["prompt"] != "draw" || body["n"] != float64(2) || body["size"] != "1024x1024" || body["aspect_ratio"] != "1:1" || body["messages"] != nil || body["modalities"] != nil {
 				t.Fatalf("image request %#v", body)
 			}
-			return jsonResp(200, `{"id":"img","model":"im","choices":[{"message":{"images":[{"image_url":{"url":"data:image/png;base64,zzz"}}]},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+			return jsonResp(200, `{"id":"img","model":"im","created":1,"data":[{"b64_json":"zzz","media_type":"image/png"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0.01}}`), nil
 		case 4:
 			if req.URL.Path != "/api/v1/videos" || body["size"] != "720p" {
 				t.Fatalf("video submit %#v %s", body, req.URL.Path)
@@ -216,12 +216,29 @@ func TestCompletionEmbeddingImageAndVideo(t *testing.T) {
 		t.Fatalf("embedding %#v %v", e, err)
 	}
 	i, err := p.Image("im").DoGenerate(context.Background(), ImageGenerateOptions{Prompt: "draw", N: 2, Size: "1024x1024", AspectRatio: "1:1", InputFiles: []FileContent{{Data: []byte("x"), MediaType: "image/png"}}})
-	if err != nil || i.Images[0] != "zzz" || len(i.Warnings) != 2 {
+	if err != nil || i.Images[0] != "zzz" || i.ImageData[0].MediaType != "image/png" || i.Usage.TotalTokens != 2 {
 		t.Fatalf("image %#v %v", i, err)
 	}
 	v, err := p.VideoModel("vm", VideoOptions{PollInterval: time.Millisecond, MaxPollTime: time.Second}).DoGenerate(context.Background(), VideoGenerateOptions{Prompt: "go", Resolution: "720p", N: 2})
 	if err != nil || v.Videos[0].URL != "https://v" || len(v.Warnings) != 1 {
 		t.Fatalf("video %#v %v", v, err)
+	}
+}
+
+func TestImageGenerationUsesImagesAPI(t *testing.T) {
+	f := &fakeFetcher{handler: func(req *http.Request, body map[string]any) (*http.Response, error) {
+		if req.URL.Path != "/api/v1/images" || body["quality"] != "medium" || body["background"] != "opaque" || body["output_compression"] != float64(80) {
+			t.Fatalf("image request %#v %s", body, req.URL.Path)
+		}
+		return jsonResp(200, `{"data":[{"b64_json":"eA==","media_type":"image/webp"}]}`), nil
+	}}
+
+	compression := 80
+	result, err := CreateOpenRouter(ProviderSettings{Fetch: f}).Image("im").DoGenerate(context.Background(), ImageGenerateOptions{
+		Prompt: "draw", Quality: "medium", Background: "opaque", OutputCompression: &compression,
+	})
+	if err != nil || len(result.Images) != 1 || result.Images[0] != "eA==" || result.ImageData[0].MediaType != "image/webp" {
+		t.Fatalf("image %#v %v", result, err)
 	}
 }
 
