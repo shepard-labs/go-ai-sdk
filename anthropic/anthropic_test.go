@@ -132,8 +132,8 @@ func TestModelCapabilitiesForID(t *testing.T) {
 	tests := map[string]ModelCapabilities{
 		"claude-opus-4-8":           {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true},
 		"claude-opus-4-7":           {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true},
-		"claude-sonnet-4-6":         {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true},
-		"claude-opus-4-6":           {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true},
+		"claude-sonnet-4-6":         {MaxOutputTokens: 128000, StructuredOutput: true},
+		"claude-opus-4-6":           {MaxOutputTokens: 128000, StructuredOutput: true},
 		"claude-sonnet-4-5":         {MaxOutputTokens: 64000, StructuredOutput: true},
 		"claude-opus-4-5":           {MaxOutputTokens: 64000, StructuredOutput: true},
 		"claude-haiku-4-5":          {MaxOutputTokens: 64000, StructuredOutput: true},

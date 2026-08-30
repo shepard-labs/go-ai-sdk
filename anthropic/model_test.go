@@ -303,7 +303,7 @@ func TestUnsupportedParameterWarnings(t *testing.T) {
 	value := 1.0
 	seed := 1
 	warnings := unsupportedWarnings(GenerateOptions{FrequencyPenalty: &value, PresencePenalty: &value, Seed: &seed, TopP: &value, Temperature: &value}, ModelCapabilities{})
-	if len(warnings) != 4 {
+	if len(warnings) != 3 {
 		t.Fatalf("warnings = %#v", warnings)
 	}
 }
@@ -325,7 +325,7 @@ func TestBuildRequestOmitsSamplingForModelsThatRejectIt(t *testing.T) {
 	temperature := 0.2
 	topP := 0.9
 	topK := 40
-	model := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-4-6").(*anthropicLanguageModel)
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-opus-4-8").(*anthropicLanguageModel)
 	req, warnings := model.buildRequest(GenerateOptions{Temperature: &temperature, TopP: &topP, TopK: &topK}, false)
 	if req.Temperature != nil || req.TopP != nil || req.TopK != nil {
 		t.Fatalf("request = %#v", req)

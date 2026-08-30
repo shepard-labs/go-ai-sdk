@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
@@ -160,6 +161,8 @@ type apiThinking struct {
 	Display      string `json:"display,omitempty"`
 }
 
+const minimumThinkingBudgetTokens = 1024
+
 type apiCachingConfig struct {
 	Type string `json:"type"`
 	TTL  string `json:"ttl"`
@@ -307,12 +310,36 @@ func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, s
 	if toolChoice != nil && toolChoice.DisableParallelToolUse {
 		modelOptions.DisableParallelToolUse = true
 	}
+	capabilities, knownModel := modelCapabilities(m.modelID)
 	maxTokens := opts.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = capabilities.MaxOutputTokens
+		if !knownModel {
+			warnings = append(warnings, Warning{Type: "compatibility", Message: fmt.Sprintf("The model %q is unknown. The max output tokens have been limited to %d. Set maxTokens explicitly to override this limit.", m.modelID, maxTokens)})
+		}
+	}
+	if modelOptions.Thinking != nil && modelOptions.Thinking.Type == ThinkingTypeEnabled && modelOptions.Thinking.BudgetTokens != 0 && modelOptions.Thinking.BudgetTokens < minimumThinkingBudgetTokens {
+		return apiMessagesRequest{}, warnings, ModelOptions{}, false, &RequestConstructionError{
+			ToolIndex: -1,
+			Message:   fmt.Sprintf("thinking budget must be zero to use the default or at least %d tokens, got %d", minimumThinkingBudgetTokens, modelOptions.Thinking.BudgetTokens),
+		}
+	}
 	thinking, thinkingWarnings := buildThinking(modelOptions.Thinking, &maxTokens, &temperature, &opts.TopK, &opts.TopP)
 	warnings = append(warnings, thinkingWarnings...)
+	if knownModel && thinking != nil && thinking.Type == "enabled" {
+		outputTokens := maxTokens - thinking.BudgetTokens
+		if thinking.BudgetTokens >= capabilities.MaxOutputTokens {
+			return apiMessagesRequest{}, warnings, ModelOptions{}, false, &ThinkingTokenLimitError{
+				ModelID:         m.modelID,
+				BudgetTokens:    thinking.BudgetTokens,
+				OutputTokens:    outputTokens,
+				MaxOutputTokens: capabilities.MaxOutputTokens,
+			}
+		}
+	}
 	topK := opts.TopK
 	topP := opts.TopP
-	if ModelCapabilitiesForID(m.modelID).RejectsSampling {
+	if capabilities.RejectsSampling {
 		if temperature != nil && *temperature != 1.0 {
 			warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "temperature is not supported by this Anthropic model"})
 		}
@@ -326,8 +353,15 @@ func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, s
 		topK = nil
 		topP = nil
 	}
-	if temperature != nil && topP != nil {
+	if isClaudeModel(m.modelID) && temperature != nil && topP != nil {
+		warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "topP is ignored when temperature is set for Anthropic models"})
 		topP = nil
+	}
+	if knownModel && maxTokens > capabilities.MaxOutputTokens {
+		if opts.MaxTokens > 0 {
+			warnings = append(warnings, Warning{Type: "unsupported-setting", Message: fmt.Sprintf("%d (maxTokens + thinking budget) is greater than %s %d max output tokens. The max output tokens have been limited to %d.", maxTokens, m.modelID, capabilities.MaxOutputTokens, capabilities.MaxOutputTokens)})
+		}
+		maxTokens = capabilities.MaxOutputTokens
 	}
 	outputConfig, structuredTools, structuredChoice, disableParallel := m.buildStructuredOutput(opts.StructuredOutput, opts.ResponseFormat, modelOptions)
 	if outputConfig == nil && (modelOptions.Effort != "" || modelOptions.TaskBudget != nil) {
@@ -415,11 +449,12 @@ func buildThinking(config *ThinkingConfig, maxTokens *int, temperature **float64
 	switch config.Type {
 	case ThinkingTypeEnabled:
 		budget := config.BudgetTokens
+		var warnings []Warning
 		if budget == 0 {
-			budget = 1024
+			budget = minimumThinkingBudgetTokens
+			warnings = append(warnings, Warning{Type: "compatibility", Message: "thinking budget is required when thinking is enabled. using default budget of 1024 tokens."})
 		}
 		*maxTokens += budget
-		var warnings []Warning
 		if *temperature != nil {
 			*temperature = nil
 			warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "temperature is not supported when thinking is enabled"})
@@ -540,9 +575,6 @@ func unsupportedWarnings(opts GenerateOptions, capabilities ModelCapabilities) [
 	if opts.Seed != nil {
 		warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "seed is not supported by Anthropic"})
 	}
-	if opts.TopP != nil && opts.Temperature != nil && !capabilities.RejectsSampling {
-		warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "topP is ignored when temperature is set for Anthropic models"})
-	}
 	return warnings
 }
 
@@ -551,8 +583,12 @@ func (m *anthropicLanguageModel) execute(ctx context.Context, body []byte, opts 
 		return nil, m.provider.err
 	}
 	var lastErr error
+	endpoint, err := messagesEndpoint(m.provider.baseURL)
+	if err != nil {
+		return nil, err
+	}
 	for attempt := 0; attempt <= m.provider.retry.MaxRetries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(m.provider.baseURL, "/")+"/messages", bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -587,6 +623,18 @@ func (m *anthropicLanguageModel) execute(ctx context.Context, body []byte, opts 
 	return nil, lastErr
 }
 
+func messagesEndpoint(baseURL string) (string, error) {
+	u, err := url.ParseRequestURI(baseURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		if err == nil {
+			err = errors.New("base URL must include a scheme and host")
+		}
+		return "", &InvalidBaseURLError{URL: baseURL, Cause: err}
+	}
+	u = u.JoinPath("messages")
+	return u.String(), nil
+}
+
 func shouldRetryRequest(resp *http.Response, err error, replaySafe bool) bool {
 	if !replaySafe {
 		return false
@@ -607,22 +655,47 @@ func shouldRetry(resp *http.Response, err error) bool {
 func timeNewTimer(delay time.Duration) *time.Timer { return time.NewTimer(delay) }
 
 func ModelCapabilitiesForID(modelID string) ModelCapabilities {
-	switch modelID {
-	case "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6":
-		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}
-	case "claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5", "claude-haiku-4-5-20251001":
-		return ModelCapabilities{MaxOutputTokens: 64000, StructuredOutput: true}
-	case "claude-opus-4-1":
-		return ModelCapabilities{MaxOutputTokens: 32000, StructuredOutput: true}
-	case "claude-sonnet-4", "claude-sonnet-4-0":
-		return ModelCapabilities{MaxOutputTokens: 64000}
-	case "claude-opus-4", "claude-opus-4-0":
-		return ModelCapabilities{MaxOutputTokens: 32000}
-	case "claude-3-haiku", "claude-3-haiku-20240307":
-		return ModelCapabilities{MaxOutputTokens: 4096}
+	capabilities, _ := modelCapabilities(modelID)
+	return capabilities
+}
+
+func modelCapabilities(modelID string) (ModelCapabilities, bool) {
+	switch {
+	case isModelAlias(modelID, "claude-opus-5"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}, true
+	case isModelAlias(modelID, "claude-opus-4-8"), isModelAlias(modelID, "claude-opus-4-7"), isModelAlias(modelID, "claude-fable-5"), isModelAlias(modelID, "claude-sonnet-5"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}, true
+	case isModelAlias(modelID, "claude-sonnet-4-6"), isModelAlias(modelID, "claude-opus-4-6"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true}, true
+	case isModelAlias(modelID, "claude-sonnet-4-5"), isModelAlias(modelID, "claude-opus-4-5"), isModelAlias(modelID, "claude-haiku-4-5"):
+		return ModelCapabilities{MaxOutputTokens: 64000, StructuredOutput: true}, true
+	case isModelAlias(modelID, "claude-opus-4-1"):
+		return ModelCapabilities{MaxOutputTokens: 32000, StructuredOutput: true}, true
+	case isModelAlias(modelID, "claude-sonnet-4"), modelID == "claude-sonnet-4-0":
+		return ModelCapabilities{MaxOutputTokens: 64000}, true
+	case isModelAlias(modelID, "claude-opus-4"), modelID == "claude-opus-4-0":
+		return ModelCapabilities{MaxOutputTokens: 32000}, true
+	case isModelAlias(modelID, "claude-3-haiku"):
+		return ModelCapabilities{MaxOutputTokens: 4096}, true
+	case regexp.MustCompile(`^claude-(?:instant(?:-|$)|v?2(?:$|[-.:])|3(?:$|[-.]))`).MatchString(modelID):
+		return ModelCapabilities{MaxOutputTokens: 4096}, false
+	case isClaudeModel(modelID):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}, false
 	default:
-		return ModelCapabilities{MaxOutputTokens: 4096}
+		return ModelCapabilities{MaxOutputTokens: 4096}, false
 	}
+}
+
+func isModelAlias(modelID, alias string) bool {
+	if modelID == alias {
+		return true
+	}
+	suffix := strings.TrimPrefix(modelID, alias+"-")
+	return suffix != modelID && regexp.MustCompile(`^[0-9]{8}$`).MatchString(suffix)
+}
+
+func isClaudeModel(modelID string) bool {
+	return strings.HasPrefix(modelID, "claude-")
 }
 
 type apiMessagesResponse struct {

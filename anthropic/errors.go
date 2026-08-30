@@ -11,14 +11,50 @@ type RequestConstructionError struct {
 	Message   string
 }
 
+type ThinkingTokenLimitError struct {
+	ModelID         string
+	BudgetTokens    int
+	OutputTokens    int
+	MaxOutputTokens int
+}
+
+type InvalidBaseURLError struct {
+	URL   string
+	Cause error
+}
+
+func (e *InvalidBaseURLError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("anthropic: invalid base URL %q: %v", e.URL, e.Cause)
+}
+
+func (e *InvalidBaseURLError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 func (e *RequestConstructionError) Error() string {
 	if e == nil {
 		return ""
+	}
+	if e.ToolIndex < 0 {
+		return "anthropic: invalid request: " + e.Message
 	}
 	if e.ToolID != "" {
 		return fmt.Sprintf("anthropic: invalid tool at index %d (%s): %s", e.ToolIndex, e.ToolID, e.Message)
 	}
 	return fmt.Sprintf("anthropic: invalid tool at index %d: %s", e.ToolIndex, e.Message)
+}
+
+func (e *ThinkingTokenLimitError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("anthropic: thinking budget %d plus output tokens %d exceeds %s %d max output tokens; thinking budget must be less than the model limit and leave at least one output token", e.BudgetTokens, e.OutputTokens, e.ModelID, e.MaxOutputTokens)
 }
 
 type APIError struct {

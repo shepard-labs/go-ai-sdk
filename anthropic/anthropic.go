@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -58,8 +59,9 @@ type anthropicProvider struct {
 }
 
 func CreateAnthropic(opts ProviderSettings) Provider {
+	baseURL := normalizeBaseURL(opts.BaseURL)
 	p := &anthropicProvider{
-		baseURL:               valueOrDefault(opts.BaseURL, defaultBaseURL),
+		baseURL:               baseURL,
 		headers:               make(http.Header),
 		fetch:                 opts.Fetch,
 		generateID:            opts.GenerateID,
@@ -68,6 +70,12 @@ func CreateAnthropic(opts ProviderSettings) Provider {
 		retry:                 defaultRetryOptions(opts.Retry),
 		maxResponseBodyBytes:  maxPositiveOrDefault(opts.MaxResponseBodyBytes, defaultMaxResponseBodyBytes),
 		maxErrorResponseBytes: maxPositiveOrDefault(opts.MaxErrorResponseBytes, defaultMaxErrorBodyBytes),
+	}
+	if parsed, err := url.ParseRequestURI(baseURL); err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		if err == nil {
+			err = errors.New("base URL must include a scheme and host")
+		}
+		p.err = &InvalidBaseURLError{URL: baseURL, Cause: err}
 	}
 	if p.logger == nil {
 		p.logger = noopLogger{}
@@ -88,7 +96,7 @@ func CreateAnthropic(opts ProviderSettings) Provider {
 		apiKey = os.Getenv("ANTHROPIC_API_KEY")
 		authToken = os.Getenv("ANTHROPIC_AUTH_TOKEN")
 	}
-	if apiKey != "" && authToken != "" {
+	if apiKey != "" && authToken != "" && p.err == nil {
 		p.err = ErrMultipleAuthMethods
 	}
 	if apiKey != "" {
@@ -101,6 +109,16 @@ func CreateAnthropic(opts ProviderSettings) Provider {
 	p.headers.Set("User-Agent", "ai-sdk-go/anthropic/"+Version)
 
 	return p
+}
+
+func normalizeBaseURL(baseURL string) string {
+	if baseURL == "" {
+		return defaultBaseURL
+	}
+	if baseURL == "https://api.anthropic.com" || baseURL == "https://api.anthropic.com/" {
+		return defaultBaseURL
+	}
+	return baseURL
 }
 
 func defaultRetryOptions(opts *RetryOptions) RetryOptions {
@@ -289,8 +307,6 @@ func betaHeadersForOptions(opts ModelOptions) []string {
 			add("web-search-2025-03-05")
 		case "anthropic.web_fetch_20260209", "anthropic.web_search_20260209":
 			add("code-execution-web-tools-2026-02-09")
-		case "anthropic.tool_search_regex_20251119", "anthropic.tool_search_bm25_20251119":
-			add("tool-search-2025-11-19")
 		case "anthropic.advisor_20260301":
 			add("advisor-tool-2026-03-01")
 		}

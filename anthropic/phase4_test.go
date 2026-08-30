@@ -17,16 +17,16 @@ func TestThinkingEnabledRequest(t *testing.T) {
 	if req.Thinking == nil || req.Thinking.Type != "enabled" || req.Thinking.BudgetTokens != 2048 || req.MaxTokens != 2148 {
 		t.Fatalf("request = %#v", req)
 	}
-	if req.Temperature != nil || req.TopK != nil || req.TopP != nil || len(warnings) != 4 {
+	if req.Temperature != nil || req.TopK != nil || req.TopP != nil || len(warnings) != 3 {
 		t.Fatalf("request = %#v warnings = %#v", req, warnings)
 	}
 }
 
 func TestThinkingEnabledDefaultBudget(t *testing.T) {
 	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeEnabled}}).(*anthropicLanguageModel)
-	req, _ := model.buildRequest(GenerateOptions{MaxTokens: 1}, false)
-	if req.Thinking.BudgetTokens != 1024 || req.MaxTokens != 1025 {
-		t.Fatalf("request = %#v", req)
+	req, warnings := model.buildRequest(GenerateOptions{MaxTokens: 1}, false)
+	if req.Thinking.BudgetTokens != 1024 || req.MaxTokens != 1025 || len(warnings) != 1 || warnings[0].Type != "compatibility" {
+		t.Fatalf("request = %#v warnings = %#v", req, warnings)
 	}
 }
 
