@@ -676,14 +676,16 @@ type Metadata struct {
 }
 type ToolCallCaller string
 
-type CitationsConfig struct{ Enabled bool }
+type CitationsConfig struct {
+	Enabled bool `json:"enabled"`
+}
 
 type UserLocation struct {
-	Type     string
-	City     string
-	Region   string
-	Country  string
-	Timezone string
+	Type     string `json:"type"`
+	City     string `json:"city,omitempty"`
+	Region   string `json:"region,omitempty"`
+	Country  string `json:"country,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
 }
 
 type CachingConfig struct{ Enabled bool }

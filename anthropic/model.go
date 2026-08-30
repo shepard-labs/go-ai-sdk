@@ -33,12 +33,15 @@ func (m *anthropicLanguageModel) SupportURLs() map[string][]*regexp.Regexp {
 
 func (m *anthropicLanguageModel) DoGenerate(ctx context.Context, opts GenerateOptions) (*GenerateResult, error) {
 	m.provider.logger.Debug("anthropic generate request", "model", m.modelID)
-	request, warnings, requestOptions := m.buildRequestWithOptions(opts, false)
+	request, warnings, requestOptions, replaySafe, err := m.buildRequestWithOptions(opts, false)
+	if err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := m.execute(ctx, body, requestOptions)
+	resp, err := m.execute(ctx, body, requestOptions, replaySafe)
 	if err != nil {
 		m.provider.logger.Error("anthropic generate request failed", "model", m.modelID, "error", err)
 		return nil, err
@@ -74,12 +77,15 @@ func (m *anthropicLanguageModel) DoGenerate(ctx context.Context, opts GenerateOp
 
 func (m *anthropicLanguageModel) DoStream(ctx context.Context, opts StreamOptions) (*StreamResult, error) {
 	m.provider.logger.Debug("anthropic stream request", "model", m.modelID)
-	request, warnings, requestOptions := m.buildRequestWithOptions(GenerateOptions(opts), true)
+	request, warnings, requestOptions, replaySafe, err := m.buildRequestWithOptions(GenerateOptions(opts), true)
+	if err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := m.execute(ctx, body, requestOptions)
+	resp, err := m.execute(ctx, body, requestOptions, replaySafe)
 	if err != nil {
 		m.provider.logger.Error("anthropic stream request failed", "model", m.modelID, "error", err)
 		return nil, err
@@ -119,7 +125,7 @@ type apiMessagesRequest struct {
 	Temperature            *float64           `json:"temperature,omitempty"`
 	TopK                   *int               `json:"top_k,omitempty"`
 	TopP                   *float64           `json:"top_p,omitempty"`
-	Tools                  []Tool             `json:"tools,omitempty"`
+	Tools                  []apiTool          `json:"tools,omitempty"`
 	ToolChoice             *ToolChoice        `json:"tool_choice,omitempty"`
 	Container              *Container         `json:"container,omitempty"`
 	MCPServers             []MCPServer        `json:"mcp_servers,omitempty"`
@@ -138,16 +144,144 @@ type apiThinking struct {
 	Display      string `json:"display,omitempty"`
 }
 
+type apiCachingConfig struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl"`
+}
+
+// apiTool is the request-wire declaration and intentionally excludes SDK-only
+// identity, execution, dynamic, and schema metadata from Tool.
+type apiTool struct {
+	ID                  string                   `json:"-"`
+	Name                string                   `json:"name,omitempty"`
+	Description         string                   `json:"description,omitempty"`
+	InputSchema         any                      `json:"input_schema,omitempty"`
+	CacheControl        *CacheControl            `json:"cache_control,omitempty"`
+	EagerInputStreaming *bool                    `json:"eager_input_streaming,omitempty"`
+	Strict              *bool                    `json:"strict,omitempty"`
+	DeferLoading        *bool                    `json:"defer_loading,omitempty"`
+	AllowedCallers      []ToolCallCaller         `json:"allowed_callers,omitempty"`
+	InputExamples       []any                    `json:"input_examples,omitempty"`
+	Type                string                   `json:"type,omitempty"`
+	DisplayWidthPx      *int                     `json:"display_width_px,omitempty"`
+	DisplayHeightPx     *int                     `json:"display_height_px,omitempty"`
+	DisplayNumber       *int                     `json:"display_number,omitempty"`
+	EnableZoom          *bool                    `json:"enable_zoom,omitempty"`
+	MaxCharacters       *int                     `json:"max_characters,omitempty"`
+	MaxUses             *int                     `json:"max_uses,omitempty"`
+	AllowedDomains      []string                 `json:"allowed_domains,omitempty"`
+	BlockedDomains      []string                 `json:"blocked_domains,omitempty"`
+	Citations           *CitationsConfig         `json:"citations,omitempty"`
+	MaxContentTokens    *int                     `json:"max_content_tokens,omitempty"`
+	UserLocation        *UserLocation            `json:"user_location,omitempty"`
+	Model               string                   `json:"model,omitempty"`
+	Caching             *apiCachingConfig        `json:"caching,omitempty"`
+	MCPServerName       string                   `json:"mcp_server_name,omitempty"`
+	DefaultConfig       *MCPToolConfig           `json:"default_config,omitempty"`
+	Configs             map[string]MCPToolConfig `json:"configs,omitempty"`
+}
+
+// Mappings: @ai-sdk/anthropic@3.0.115 src/anthropic-prepare-tools.ts:135-376;
+// declarations are unchanged in @ai-sdk/anthropic@4.0.46:132-375.
+func toolsToWire(tools []Tool) ([]apiTool, bool, error) {
+	wire := make([]apiTool, 0, len(tools))
+	replaySafe := true
+	for i, tool := range tools {
+		if tool.ID == "" {
+			wire = append(wire, apiTool{Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema, CacheControl: tool.CacheControl, EagerInputStreaming: tool.EagerInputStreaming, Strict: tool.Strict, DeferLoading: tool.DeferLoading, AllowedCallers: append([]ToolCallCaller(nil), tool.AllowedCallers...), InputExamples: append([]any(nil), tool.InputExamples...)})
+			continue
+		}
+		replaySafe = false
+		var provider apiTool
+		switch tool.ID {
+		case "anthropic.bash_20241022":
+			provider.Type, provider.Name = "bash_20241022", "bash"
+		case "anthropic.bash_20250124":
+			provider.Type, provider.Name = "bash_20250124", "bash"
+		case "anthropic.code_execution_20250522":
+			provider.Type, provider.Name = "code_execution_20250522", "code_execution"
+		case "anthropic.code_execution_20250825":
+			provider.Type, provider.Name = "code_execution_20250825", "code_execution"
+		case "anthropic.code_execution_20260120":
+			provider.Type, provider.Name = "code_execution_20260120", "code_execution"
+		case "anthropic.computer_20251124":
+			if tool.DisplayWidthPx == nil || tool.DisplayHeightPx == nil || tool.DisplayNumber == nil || tool.EnableZoom == nil || *tool.DisplayWidthPx <= 0 || *tool.DisplayHeightPx <= 0 || *tool.DisplayNumber < 0 {
+				return nil, false, invalidProviderTool(i, tool.ID, "valid display fields and enable zoom are required")
+			}
+			provider = apiTool{Type: "computer_20251124", Name: "computer", DisplayWidthPx: tool.DisplayWidthPx, DisplayHeightPx: tool.DisplayHeightPx, DisplayNumber: tool.DisplayNumber, EnableZoom: tool.EnableZoom}
+		case "anthropic.text_editor_20250728":
+			if tool.MaxCharacters != nil && *tool.MaxCharacters <= 0 {
+				return nil, false, invalidProviderTool(i, tool.ID, "max characters must be positive")
+			}
+			provider = apiTool{Type: "text_editor_20250728", Name: "str_replace_based_edit_tool", MaxCharacters: tool.MaxCharacters}
+		case "anthropic.memory_20250818":
+			provider.Type, provider.Name = "memory_20250818", "memory"
+		case "anthropic.web_fetch_20250910", "anthropic.web_fetch_20260209":
+			if err := validateUses(i, tool.ID, tool.MaxUses, tool.MaxContentTokens); err != nil {
+				return nil, false, err
+			}
+			provider = apiTool{Type: strings.TrimPrefix(tool.ID, "anthropic."), Name: "web_fetch", MaxUses: tool.MaxUses, AllowedDomains: tool.AllowedDomains, BlockedDomains: tool.BlockedDomains, Citations: tool.Citations, MaxContentTokens: tool.MaxContentTokens}
+		case "anthropic.web_search_20250305", "anthropic.web_search_20260209":
+			if err := validateUses(i, tool.ID, tool.MaxUses, nil); err != nil {
+				return nil, false, err
+			}
+			if tool.UserLocation != nil && tool.UserLocation.Type != "approximate" {
+				return nil, false, invalidProviderTool(i, tool.ID, "user location type must be approximate")
+			}
+			provider = apiTool{Type: strings.TrimPrefix(tool.ID, "anthropic."), Name: "web_search", MaxUses: tool.MaxUses, AllowedDomains: tool.AllowedDomains, BlockedDomains: tool.BlockedDomains, UserLocation: tool.UserLocation}
+		case "anthropic.tool_search_regex_20251119":
+			provider.Type, provider.Name = "tool_search_tool_regex_20251119", "tool_search_tool_regex"
+		case "anthropic.tool_search_bm25_20251119":
+			provider.Type, provider.Name = "tool_search_tool_bm25_20251119", "tool_search_tool_bm25"
+		case "anthropic.advisor_20260301":
+			if tool.AdvisorModel == "" {
+				return nil, false, invalidProviderTool(i, tool.ID, "model is required")
+			}
+			if tool.AdvisorMaxUses != nil && *tool.AdvisorMaxUses <= 0 {
+				return nil, false, invalidProviderTool(i, tool.ID, "max uses must be positive")
+			}
+			var caching *apiCachingConfig
+			if tool.AdvisorCaching != nil && tool.AdvisorCaching.Enabled {
+				caching = &apiCachingConfig{Type: "ephemeral", TTL: "5m"}
+			}
+			provider = apiTool{Type: "advisor_20260301", Name: "advisor", Model: tool.AdvisorModel, MaxUses: tool.AdvisorMaxUses, Caching: caching}
+		default:
+			return nil, false, invalidProviderTool(i, tool.ID, "unknown provider tool ID")
+		}
+		provider.ID = tool.ID
+		wire = append(wire, provider)
+	}
+	return wire, replaySafe, nil
+}
+
+func validateUses(index int, id string, maxUses, maxContentTokens *int) error {
+	if maxUses != nil && *maxUses <= 0 {
+		return invalidProviderTool(index, id, "max uses must be positive")
+	}
+	if maxContentTokens != nil && *maxContentTokens <= 0 {
+		return invalidProviderTool(index, id, "max content tokens must be positive")
+	}
+	return nil
+}
+
+func invalidProviderTool(index int, id, message string) error {
+	return &RequestConstructionError{ToolIndex: index, ToolID: id, Message: message}
+}
+
 func (m *anthropicLanguageModel) buildRequest(opts GenerateOptions, stream bool) (apiMessagesRequest, []Warning) {
-	request, warnings, _ := m.buildRequestWithOptions(opts, stream)
+	request, warnings, _, _, _ := m.buildRequestWithOptions(opts, stream)
 	return request, warnings
 }
 
-func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, stream bool) (apiMessagesRequest, []Warning, ModelOptions) {
+func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, stream bool) (apiMessagesRequest, []Warning, ModelOptions, bool, error) {
 	system, messages := convertPrompt(opts.Messages)
 	temperature, warnings := normalizeTemperature(opts.Temperature)
 	warnings = append(warnings, unsupportedWarnings(opts, ModelCapabilitiesForID(m.modelID))...)
 	preparedTools := prepareToolsForRequest(opts.Tools, opts.ToolOptions)
+	wireTools, replaySafe, err := toolsToWire(preparedTools)
+	if err != nil {
+		return apiMessagesRequest{}, warnings, ModelOptions{}, false, err
+	}
 	modelOptions := m.options
 	if opts.Thinking != nil {
 		modelOptions.Thinking = opts.Thinking
@@ -190,9 +324,20 @@ func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, s
 		}
 	}
 	preparedTools = append(preparedTools, prepareMCPToolsets(modelOptions.MCPServers)...)
+	if len(modelOptions.MCPServers) > 0 {
+		replaySafe = false
+	}
 	if len(structuredTools) > 0 {
 		preparedTools = append(preparedTools, structuredTools...)
+		structuredWire, _, conversionErr := toolsToWire(structuredTools)
+		if conversionErr != nil {
+			return apiMessagesRequest{}, warnings, ModelOptions{}, false, conversionErr
+		}
+		wireTools = append(wireTools, structuredWire...)
 		modelOptions.RequestTools = preparedTools
+	}
+	for _, toolset := range prepareMCPToolsets(modelOptions.MCPServers) {
+		wireTools = append(wireTools, apiTool{Type: toolset.Type, MCPServerName: toolset.MCPServerName, DefaultConfig: toolset.DefaultConfig, Configs: toolset.Configs})
 	}
 	if structuredChoice != nil {
 		toolChoice = normalizeToolChoice(structuredChoice)
@@ -217,7 +362,7 @@ func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, s
 		Temperature:            temperature,
 		TopK:                   topK,
 		TopP:                   topP,
-		Tools:                  preparedTools,
+		Tools:                  wireTools,
 		ToolChoice:             toolChoice,
 		Container:              modelOptions.Container,
 		MCPServers:             modelOptions.MCPServers,
@@ -228,7 +373,7 @@ func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, s
 		Thinking:               thinking,
 		ContextManagement:      modelOptions.ContextManagement,
 		DisableParallelToolUse: modelOptions.DisableParallelToolUse,
-	}, warnings, modelOptions
+	}, warnings, modelOptions, replaySafe, nil
 }
 
 func normalizeToolChoice(choice *ToolChoice) *ToolChoice {
@@ -385,7 +530,7 @@ func unsupportedWarnings(opts GenerateOptions, capabilities ModelCapabilities) [
 	return warnings
 }
 
-func (m *anthropicLanguageModel) execute(ctx context.Context, body []byte, opts ModelOptions) (*http.Response, error) {
+func (m *anthropicLanguageModel) execute(ctx context.Context, body []byte, opts ModelOptions, replaySafe bool) (*http.Response, error) {
 	if m.provider.err != nil {
 		return nil, m.provider.err
 	}
@@ -405,7 +550,7 @@ func (m *anthropicLanguageModel) execute(ctx context.Context, body []byte, opts 
 			}
 		}
 		resp, err := m.provider.fetch.Do(req)
-		if !shouldRetry(resp, err) || attempt == m.provider.retry.MaxRetries {
+		if !shouldRetryRequest(resp, err, replaySafe) || attempt == m.provider.retry.MaxRetries {
 			return resp, err
 		}
 		lastErr = err
@@ -424,6 +569,13 @@ func (m *anthropicLanguageModel) execute(ctx context.Context, body []byte, opts 
 		}
 	}
 	return nil, lastErr
+}
+
+func shouldRetryRequest(resp *http.Response, err error, replaySafe bool) bool {
+	if !replaySafe {
+		return false
+	}
+	return shouldRetry(resp, err)
 }
 
 func shouldRetry(resp *http.Response, err error) bool {

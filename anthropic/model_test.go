@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -11,6 +12,117 @@ import (
 	"testing"
 	"time"
 )
+
+// Expected declarations are copied from @ai-sdk/anthropic@3.0.115
+// src/anthropic-prepare-tools.ts:140-366 and checked against 4.0.46:137-365.
+func TestProviderToolsUseAuthoritativeWireDeclarations(t *testing.T) {
+	one, tokens, width, height, display := 1, 2048, 800, 600, 0
+	zoom := false
+	citations := &CitationsConfig{Enabled: true}
+	location := &UserLocation{Type: "approximate", City: "San Francisco", Region: "California", Country: "US", Timezone: "America/Los_Angeles"}
+	tests := []struct {
+		tool Tool
+		want string
+	}{
+		{Tool{ID: "anthropic.bash_20241022"}, `{"name":"bash","type":"bash_20241022"}`},
+		{Tool{ID: "anthropic.bash_20250124"}, `{"name":"bash","type":"bash_20250124"}`},
+		{Tool{ID: "anthropic.code_execution_20250522"}, `{"name":"code_execution","type":"code_execution_20250522"}`},
+		{Tool{ID: "anthropic.code_execution_20250825"}, `{"name":"code_execution","type":"code_execution_20250825"}`},
+		{Tool{ID: "anthropic.code_execution_20260120"}, `{"name":"code_execution","type":"code_execution_20260120"}`},
+		{Tool{ID: "anthropic.computer_20251124", DisplayWidthPx: &width, DisplayHeightPx: &height, DisplayNumber: &display, EnableZoom: &zoom}, `{"name":"computer","type":"computer_20251124","display_width_px":800,"display_height_px":600,"display_number":0,"enable_zoom":false}`},
+		{Tool{ID: "anthropic.text_editor_20250728", MaxCharacters: &one}, `{"name":"str_replace_based_edit_tool","type":"text_editor_20250728","max_characters":1}`},
+		{Tool{ID: "anthropic.memory_20250818"}, `{"name":"memory","type":"memory_20250818"}`},
+		{Tool{ID: "anthropic.web_fetch_20250910", MaxUses: &one, AllowedDomains: []string{"allowed.example"}, BlockedDomains: []string{"blocked.example"}, Citations: citations, MaxContentTokens: &tokens}, `{"name":"web_fetch","type":"web_fetch_20250910","max_uses":1,"allowed_domains":["allowed.example"],"blocked_domains":["blocked.example"],"citations":{"enabled":true},"max_content_tokens":2048}`},
+		{Tool{ID: "anthropic.web_fetch_20260209", MaxUses: &one, AllowedDomains: []string{"allowed.example"}, BlockedDomains: []string{"blocked.example"}, Citations: citations, MaxContentTokens: &tokens}, `{"name":"web_fetch","type":"web_fetch_20260209","max_uses":1,"allowed_domains":["allowed.example"],"blocked_domains":["blocked.example"],"citations":{"enabled":true},"max_content_tokens":2048}`},
+		{Tool{ID: "anthropic.web_search_20250305", MaxUses: &one, AllowedDomains: []string{"allowed.example"}, BlockedDomains: []string{"blocked.example"}, UserLocation: location}, `{"name":"web_search","type":"web_search_20250305","max_uses":1,"allowed_domains":["allowed.example"],"blocked_domains":["blocked.example"],"user_location":{"type":"approximate","city":"San Francisco","region":"California","country":"US","timezone":"America/Los_Angeles"}}`},
+		{Tool{ID: "anthropic.web_search_20260209", MaxUses: &one, AllowedDomains: []string{"allowed.example"}, BlockedDomains: []string{"blocked.example"}, UserLocation: location}, `{"name":"web_search","type":"web_search_20260209","max_uses":1,"allowed_domains":["allowed.example"],"blocked_domains":["blocked.example"],"user_location":{"type":"approximate","city":"San Francisco","region":"California","country":"US","timezone":"America/Los_Angeles"}}`},
+		{Tool{ID: "anthropic.tool_search_regex_20251119"}, `{"name":"tool_search_tool_regex","type":"tool_search_tool_regex_20251119"}`},
+		{Tool{ID: "anthropic.tool_search_bm25_20251119"}, `{"name":"tool_search_tool_bm25","type":"tool_search_tool_bm25_20251119"}`},
+		{Tool{ID: "anthropic.advisor_20260301", Name: "sdk-name", Description: "sdk description", InputSchema: "sdk input", ArgsSchema: "sdk args", OutputSchema: "sdk output", Dynamic: true, ProviderExecuted: true, AdvisorModel: "claude-opus-4-8", AdvisorMaxUses: &one, AdvisorCaching: &CachingConfig{true}}, `{"name":"advisor","type":"advisor_20260301","max_uses":1,"model":"claude-opus-4-8","caching":{"type":"ephemeral","ttl":"5m"}}`},
+	}
+	for _, tt := range tests {
+		wire, replaySafe, err := toolsToWire([]Tool{tt.tool})
+		if err != nil {
+			t.Fatalf("%s: %v", tt.tool.ID, err)
+		}
+		if replaySafe {
+			t.Fatalf("%s marked replay safe", tt.tool.ID)
+		}
+		got, err := json.Marshal(wire[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != tt.want {
+			t.Fatalf("%s = %s, want %s", tt.tool.ID, got, tt.want)
+		}
+	}
+}
+
+func TestOrdinaryClientToolExactWireDeclaration(t *testing.T) {
+	trueValue := true
+	tool := Tool{ID: "sdk-only", Name: "lookup", Description: "Look up a record", InputSchema: map[string]any{"type": "object"}, ArgsSchema: "sdk args", OutputSchema: "sdk output", CacheControl: &CacheControl{Type: "ephemeral", TTL: "5m"}, EagerInputStreaming: &trueValue, Strict: &trueValue, DeferLoading: &trueValue, AllowedCallers: []ToolCallCaller{"direct"}, InputExamples: []any{map[string]any{"id": "123"}}, Dynamic: true, ProviderExecuted: true}
+	tool.ID = ""
+	wire, replaySafe, err := toolsToWire([]Tool{tool})
+	if err != nil || !replaySafe {
+		t.Fatalf("wire conversion: replaySafe=%v err=%v", replaySafe, err)
+	}
+	got, err := json.Marshal(wire[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"name":"lookup","description":"Look up a record","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral","ttl":"5m"},"eager_input_streaming":true,"strict":true,"defer_loading":true,"allowed_callers":["direct"],"input_examples":[{"id":"123"}]}`
+	if string(got) != want {
+		t.Fatalf("tool = %s, want %s", got, want)
+	}
+}
+
+func TestToolWireConstructionFailsClosedBeforeTransport(t *testing.T) {
+	var attempts atomic.Int32
+	model := CreateAnthropic(ProviderSettings{Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { attempts.Add(1); return nil, errors.New("unexpected") }}}).Model("claude-3-haiku").(*anthropicLanguageModel)
+	zero := 0
+	for index, tool := range []Tool{{ID: "anthropic.unknown"}, {ID: "anthropic.computer_20251124"}, {ID: "anthropic.web_fetch_20260209", MaxUses: &zero}} {
+		_, err := model.DoGenerate(context.Background(), GenerateOptions{Tools: []Tool{tool}})
+		var constructionErr *RequestConstructionError
+		if !errors.As(err, &constructionErr) {
+			t.Fatalf("error = %T %v", err, err)
+		}
+		if constructionErr.ToolIndex != 0 || constructionErr.ToolID != tool.ID || constructionErr.Message == "" {
+			t.Fatalf("tool %d error = %#v", index, constructionErr)
+		}
+	}
+	if attempts.Load() != 0 {
+		t.Fatalf("transport attempts = %d", attempts.Load())
+	}
+}
+
+func TestToolRequestsRetrySafety(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		modelOptions ModelOptions
+		tools        []Tool
+		wantAttempts int32
+	}{
+		{"provider tool", ModelOptions{}, []Tool{{ID: "anthropic.code_execution_20250522"}}, 1},
+		{"server tool", ModelOptions{}, []Tool{{ID: "anthropic.web_search_20260209"}}, 1},
+		{"MCP toolset", ModelOptions{MCPServers: []MCPServer{{Name: "server"}}}, nil, 1},
+		{"ordinary client tool", ModelOptions{}, []Tool{{Name: "lookup"}}, 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			model := CreateAnthropic(ProviderSettings{Retry: &RetryOptions{MaxRetries: 2, BaseDelay: time.Nanosecond, MaxDelay: time.Nanosecond}, Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+				attempts.Add(1)
+				return jsonResponse(500, `{"error":{"type":"api_error","message":"failed"}}`), nil
+			}}}).Model("claude-3-haiku", tt.modelOptions)
+			_, err := model.DoGenerate(context.Background(), GenerateOptions{Tools: tt.tools})
+			if err == nil {
+				t.Fatal("DoGenerate error = nil")
+			}
+			if attempts.Load() != tt.wantAttempts {
+				t.Fatalf("attempts = %d, want %d", attempts.Load(), tt.wantAttempts)
+			}
+		})
+	}
+}
 
 type roundTripFetcher struct {
 	fn func(*http.Request) (*http.Response, error)

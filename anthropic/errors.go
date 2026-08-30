@@ -5,6 +5,22 @@ import (
 	"net/http"
 )
 
+type RequestConstructionError struct {
+	ToolIndex int
+	ToolID    string
+	Message   string
+}
+
+func (e *RequestConstructionError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.ToolID != "" {
+		return fmt.Sprintf("anthropic: invalid tool at index %d (%s): %s", e.ToolIndex, e.ToolID, e.Message)
+	}
+	return fmt.Sprintf("anthropic: invalid tool at index %d: %s", e.ToolIndex, e.Message)
+}
+
 type APIError struct {
 	Type    string
 	Message string
