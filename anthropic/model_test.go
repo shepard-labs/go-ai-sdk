@@ -2,16 +2,124 @@ package anthropic
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
+
+type spoofPreSendError struct{ cause error }
+
+func (e spoofPreSendError) Error() string { return e.cause.Error() }
+func (e spoofPreSendError) Unwrap() error { return e.cause }
+func (e spoofPreSendError) As(target any) bool {
+	marked, ok := target.(**preSendTransportError)
+	if ok {
+		*marked = &preSendTransportError{cause: e.cause}
+	}
+	return ok
+}
+
+func TestPreSendMarkerCannotBeSpoofedByAs(t *testing.T) {
+	if isPreSendTransportError(spoofPreSendError{cause: errors.New("spoof")}) {
+		t.Fatal("spoofed As method was accepted as package marker")
+	}
+	if !isPreSendTransportError(fmt.Errorf("outer: %w", NewPreSendTransportError(errors.New("dial")))) {
+		t.Fatal("real marker was not found through ordinary wrapping")
+	}
+}
+
+type tracedRoundTripper struct {
+	wrote bool
+	err   error
+}
+
+func (t tracedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.wrote {
+		if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.WroteRequest != nil {
+			trace.WroteRequest(httptrace.WroteRequestInfo{})
+		}
+	}
+	return nil, t.err
+}
+
+func TestPreSendMarkingTransportBoundary(t *testing.T) {
+	tests := []struct {
+		name  string
+		wrote bool
+		err   error
+		want  bool
+	}{
+		{name: "dns before write", err: &net.DNSError{Err: "no such host", Name: "example.test"}, want: true},
+		{name: "dial refusal before write", err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}, want: true},
+		{name: "tls handshake before write", err: tls.RecordHeaderError{}, want: true},
+		{name: "reset after write", wrote: true, err: syscall.ECONNRESET},
+		{name: "eof after write", wrote: true, err: io.EOF},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, "https://example.test", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, gotErr := (preSendMarkingTransport{base: tracedRoundTripper{wrote: tt.wrote, err: tt.err}}).RoundTrip(req)
+			if got := isPreSendTransportError(gotErr); got != tt.want {
+				t.Fatalf("isPreSendTransportError() = %v, want %v; err = %v", got, tt.want, gotErr)
+			}
+		})
+	}
+}
+
+func TestDefaultHTTPClientDoesNotFollowRedirect(t *testing.T) {
+	var redirectRequests atomic.Int32
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectRequests.Add(1)
+		if got := r.Header.Get("x-api-key"); got != "" {
+			t.Errorf("redirect target received x-api-key %q", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer redirectTarget.Close()
+
+	var initialRequests atomic.Int32
+	initialServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		initialRequests.Add(1)
+		w.Header().Set("Location", redirectTarget.URL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer initialServer.Close()
+
+	req, err := http.NewRequest(http.MethodPost, initialServer.URL, strings.NewReader(`{"message":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("x-api-key", "secret")
+	resp, err := defaultHTTPClient().Do(req)
+	if err != nil {
+		t.Fatalf("Do returned transport error for redirect response: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusTemporaryRedirect)
+	}
+	if got := initialRequests.Load(); got != 1 {
+		t.Fatalf("initial requests = %d, want 1", got)
+	}
+	if got := redirectRequests.Load(); got != 0 {
+		t.Fatalf("redirect target requests = %d, want 0", got)
+	}
+}
 
 // Expected declarations are copied from @ai-sdk/anthropic@3.0.115
 // src/anthropic-prepare-tools.ts:140-366 and checked against 4.0.46:137-365.
@@ -462,14 +570,126 @@ func TestDoStreamCancelInterruptsBlockedBodyRead(t *testing.T) {
 	}
 	result.Cancel()
 	select {
-	case <-result.Stream:
+	case part, open := <-result.Stream:
+		if !open {
+			t.Fatal("stream closed without cancellation error")
+		}
+		streamErr, ok := part.(StreamError)
+		if !ok || !errors.Is(streamErr.Err, context.Canceled) {
+			t.Fatalf("terminal part = %#v, want StreamError{context.Canceled}", part)
+		}
 	case <-time.After(time.Second):
-		t.Fatal("stream did not close after cancellation")
+		t.Fatal("stream did not emit cancellation error")
+	}
+	select {
+	case _, open := <-result.Stream:
+		if open {
+			t.Fatal("stream emitted output after cancellation error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stream did not close after cancellation error")
 	}
 	select {
 	case <-body.closed:
 	default:
 		t.Fatal("stream body was not closed after cancellation")
+	}
+}
+
+type fullStreamBufferBody struct {
+	events      []string
+	next        int
+	closed      chan struct{}
+	readBlocked chan struct{}
+	readExited  chan struct{}
+	once        sync.Once
+}
+
+func (b *fullStreamBufferBody) Read(p []byte) (int, error) {
+	if b.next < len(b.events) {
+		event := b.events[b.next]
+		b.next++
+		return copy(p, event), nil
+	}
+	close(b.readBlocked)
+	<-b.closed
+	close(b.readExited)
+	return 0, io.ErrClosedPipe
+}
+
+func (b *fullStreamBufferBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+func TestDoStreamCancelReplacesFullOutputBufferWithCancellationError(t *testing.T) {
+	events := []string{event("message_start", `{"message":{"id":"m","model":"claude"}}`)}
+	for i := 0; i < 5; i++ {
+		events = append(events,
+			event("content_block_start", fmt.Sprintf(`{"index":%d,"content_block":{"type":"text"}}`, i)),
+			event("content_block_delta", fmt.Sprintf(`{"index":%d,"delta":{"type":"text_delta","text":"x"}}`, i)),
+			event("content_block_stop", fmt.Sprintf(`{"index":%d}`, i)),
+		)
+	}
+	body := &fullStreamBufferBody{events: events, closed: make(chan struct{}), readBlocked: make(chan struct{}), readExited: make(chan struct{})}
+	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: roundTripFetcher{fn: func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: req}, nil
+	}}}).Model("claude-3-haiku-20240307")
+	result, err := model.DoStream(context.Background(), StreamOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-body.readBlocked:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not fill its output buffer and block the body read")
+	}
+	deadline := time.After(time.Second)
+	for len(result.Stream) != cap(result.Stream) {
+		select {
+		case <-deadline:
+			t.Fatalf("stream buffer = %d/%d, want full", len(result.Stream), cap(result.Stream))
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	result.Cancel()
+	select {
+	case <-body.closed:
+	case <-time.After(time.Second):
+		t.Fatal("stream body was not closed after cancellation")
+	}
+	select {
+	case <-body.readExited:
+	case <-time.After(time.Second):
+		t.Fatal("blocked body read did not exit after cancellation")
+	}
+
+	var cancellationErrors, finishes int
+	stream := result.Stream
+	for stream != nil {
+		select {
+		case part, open := <-result.Stream:
+			if !open {
+				stream = nil
+				continue
+			}
+			switch part := part.(type) {
+			case StreamError:
+				if !errors.Is(part.Err, context.Canceled) {
+					t.Fatalf("StreamError = %v, want context.Canceled", part.Err)
+				}
+				cancellationErrors++
+			case StreamFinish:
+				finishes++
+			}
+		case <-time.After(time.Second):
+			t.Fatal("stream did not close after cancellation")
+		}
+	}
+	if cancellationErrors != 1 || finishes != 0 {
+		t.Fatalf("terminal events: StreamError=%d StreamFinish=%d, want 1 and 0", cancellationErrors, finishes)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math/rand"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"time"
@@ -151,7 +152,27 @@ func defaultHTTPClient() *http.Client {
 	transport.TLSHandshakeTimeout = 10 * time.Second
 	transport.ExpectContinueTimeout = time.Second
 	transport.ResponseHeaderTimeout = 2 * time.Minute
-	return &http.Client{Transport: transport}
+	return &http.Client{
+		Transport: preSendMarkingTransport{base: transport},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+type preSendMarkingTransport struct{ base http.RoundTripper }
+
+func (t preSendMarkingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	wroteRequest := false
+	trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) {
+		wroteRequest = true
+	}}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	resp, err := t.base.RoundTrip(req)
+	if err != nil && !wroteRequest {
+		return resp, NewPreSendTransportError(err)
+	}
+	return resp, err
 }
 
 func (p *anthropicProvider) retryDelay(attempt int, resp *http.Response) time.Duration {

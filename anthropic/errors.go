@@ -5,6 +5,36 @@ import (
 	"net/http"
 )
 
+type preSendTransportError struct{ cause error }
+
+func (e *preSendTransportError) Error() string { return e.cause.Error() }
+func (e *preSendTransportError) Unwrap() error { return e.cause }
+
+// NewPreSendTransportError marks a Fetcher failure as having occurred before
+// any request bytes were sent. Only failures carrying this package-owned mark
+// are eligible for transport-error retries on replay-safe requests.
+func NewPreSendTransportError(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	return &preSendTransportError{cause: cause}
+}
+
+func isPreSendTransportError(err error) bool {
+	type unwrapper interface{ Unwrap() error }
+	for err != nil {
+		if _, ok := err.(*preSendTransportError); ok {
+			return true
+		}
+		wrapped, ok := err.(unwrapper)
+		if !ok {
+			return false
+		}
+		err = wrapped.Unwrap()
+	}
+	return false
+}
+
 type RequestConstructionError struct {
 	ToolIndex int
 	ToolID    string

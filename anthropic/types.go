@@ -481,7 +481,10 @@ type StreamResult struct {
 	Request []byte
 	// Response-derived fields are safe to read after a terminal part or channel close.
 	Response *StreamResponse
-	// Cancel must be called when abandoning a stream without draining it.
+	// Cancel must be called when abandoning a stream without draining it. It
+	// interrupts body parsing and guarantees that a terminal StreamError remains
+	// retrievable before the stream channel closes. Unread streams cannot be
+	// detected automatically.
 	Cancel context.CancelFunc
 }
 

@@ -126,7 +126,10 @@ func (m *anthropicLanguageModel) DoStream(ctx context.Context, opts StreamOption
 		return nil, err
 	}
 
-	parts := make(chan StreamPart, 16)
+	// Cancellation may discard buffered nonterminal events to make room for its
+	// terminal error; normal completion preserves all events and backpressure.
+	parts := make(chan StreamPart, 17)
+	parsedParts := make(chan StreamPart)
 	responseHeaders := cloneHeader(resp.Header)
 	responseRequestID := responseRequestID(responseHeaders)
 	cancelStream := func() {
@@ -135,14 +138,55 @@ func (m *anthropicLanguageModel) DoStream(ctx context.Context, opts StreamOption
 	}
 	result := &StreamResult{Stream: parts, Parts: parts, Request: body, Response: &StreamResponse{Headers: responseHeaders, ModelID: m.modelID}, Cancel: cancelStream}
 	go func() {
-		defer close(parts)
-		defer cancelStream()
+		defer close(parsedParts)
 		for _, warning := range warnings {
-			if !sendStreamPart(streamCtx, parts, StreamRaw{Event: warning}) {
+			if !sendStreamPart(streamCtx, parsedParts, StreamRaw{Event: warning}) {
 				return
 			}
 		}
-		parseSSEStreamWithMetadata(streamCtx, resp.Body, parts, result.Response, m.provider.maxErrorResponseBytes, streamErrorMetadata{headers: responseHeaders, requestID: responseRequestID})
+		parseSSEStreamWithMetadata(streamCtx, resp.Body, parsedParts, result.Response, m.provider.maxErrorResponseBytes, streamErrorMetadata{headers: responseHeaders, requestID: responseRequestID})
+	}()
+	go func() {
+		defer close(parts)
+		defer cancelStream()
+		sendCancellation := func(err error) {
+			terminal := StreamError{Err: err}
+			for {
+				select {
+				case parts <- terminal:
+					return
+				case <-parts:
+				}
+			}
+		}
+		for {
+			select {
+			case <-streamCtx.Done():
+				sendCancellation(streamCtx.Err())
+				return
+			case part, open := <-parsedParts:
+				if !open {
+					if err := streamCtx.Err(); err != nil {
+						sendCancellation(err)
+					}
+					return
+				}
+				if isTerminalStreamPart(part) {
+					select {
+					case parts <- part:
+					case <-streamCtx.Done():
+						sendCancellation(streamCtx.Err())
+					}
+					return
+				}
+				select {
+				case <-streamCtx.Done():
+					sendCancellation(streamCtx.Err())
+					return
+				case parts <- part:
+				}
+			}
+		}
 	}()
 	return result, nil
 }
@@ -660,12 +704,21 @@ func shouldRetryRequest(resp *http.Response, err error, replaySafe bool) bool {
 
 func shouldRetry(resp *http.Response, err error) bool {
 	if err != nil {
-		return true
+		return isPreSendTransportError(err)
 	}
 	if resp == nil {
 		return false
 	}
 	return resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+}
+
+func isTerminalStreamPart(part StreamPart) bool {
+	switch part.(type) {
+	case StreamFinish, StreamError:
+		return true
+	default:
+		return false
+	}
 }
 
 func timeNewTimer(delay time.Duration) *time.Timer { return time.NewTimer(delay) }
