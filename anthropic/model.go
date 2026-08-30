@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,11 +110,13 @@ func (m *anthropicLanguageModel) DoStream(ctx context.Context, opts StreamOption
 	}
 
 	parts := make(chan StreamPart, 16)
+	responseHeaders := cloneHeader(resp.Header)
+	responseRequestID := responseRequestID(responseHeaders)
 	cancelStream := func() {
 		cancel()
 		_ = resp.Body.Close()
 	}
-	result := &StreamResult{Stream: parts, Parts: parts, Request: body, Response: &StreamResponse{Headers: resp.Header, ModelID: m.modelID}, Cancel: cancelStream}
+	result := &StreamResult{Stream: parts, Parts: parts, Request: body, Response: &StreamResponse{Headers: responseHeaders, ModelID: m.modelID}, Cancel: cancelStream}
 	go func() {
 		defer close(parts)
 		defer cancelStream()
@@ -122,7 +125,7 @@ func (m *anthropicLanguageModel) DoStream(ctx context.Context, opts StreamOption
 				return
 			}
 		}
-		parseSSEStream(streamCtx, resp.Body, parts, result.Response)
+		parseSSEStreamWithMetadata(streamCtx, resp.Body, parts, result.Response, m.provider.maxErrorResponseBytes, streamErrorMetadata{headers: responseHeaders, requestID: responseRequestID})
 	}()
 	return result, nil
 }
@@ -869,7 +872,10 @@ func readLimited(reader io.Reader, limit int64) ([]byte, bool, error) {
 	limited := io.LimitReader(reader, limit+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, false, err
+		if int64(len(body)) > limit {
+			return body[:limit], true, err
+		}
+		return body, false, err
 	}
 	if int64(len(body)) > limit {
 		return body[:limit], true, nil
@@ -919,8 +925,10 @@ func responseRequestID(header http.Header) string {
 		return ""
 	}
 	for _, name := range []string{"x-request-id", "request-id", "x-amzn-requestid"} {
-		if value := header.Get(name); value != "" {
-			return value
+		for key, values := range header {
+			if strings.EqualFold(key, name) && len(values) > 0 && values[0] != "" {
+				return values[0]
+			}
 		}
 	}
 	return ""
@@ -939,20 +947,58 @@ func sendStreamPart(ctx context.Context, out chan<- StreamPart, part StreamPart)
 // honors CRLF, comments, optional single-space field separation, repeated data
 // fields, unknown fields, and an unterminated final record.
 func parseSSEStream(ctx context.Context, reader io.Reader, out chan<- StreamPart, response *StreamResponse) {
+	parseSSEStreamWithLimit(ctx, reader, out, response, defaultMaxResponseBodyBytes)
+}
+
+func parseSSEStreamWithLimit(ctx context.Context, reader io.Reader, out chan<- StreamPart, response *StreamResponse, diagnosticLimit int64) {
+	parseSSEStreamWithMetadata(ctx, reader, out, response, diagnosticLimit, streamErrorMetadata{})
+}
+
+type streamErrorMetadata struct {
+	headers   http.Header
+	requestID string
+}
+
+func parseSSEStreamWithMetadata(ctx context.Context, reader io.Reader, out chan<- StreamPart, response *StreamResponse, diagnosticLimit int64, metadata streamErrorMetadata) {
+	if diagnosticLimit <= 0 {
+		diagnosticLimit = defaultMaxResponseBodyBytes
+	}
 	buffered := bufio.NewReader(reader)
 	var eventType string
 	var data []string
+	var rawEvent []byte
+	var rawTruncated bool
+	appendRaw := func(raw string) {
+		if rawTruncated {
+			return
+		}
+		remaining := diagnosticLimit - int64(len(rawEvent))
+		if remaining <= 0 {
+			rawTruncated = true
+			return
+		}
+		if int64(len(raw)) > remaining {
+			rawEvent = append(rawEvent, raw[:remaining]...)
+			rawTruncated = true
+			return
+		}
+		rawEvent = append(rawEvent, raw...)
+	}
 	state := streamParserState{blocks: make(map[int]*streamBlockState), finish: StreamFinish{FinishReason: FinishReasonUnknown}}
 	dispatch := func() bool {
 		if eventType == "" && len(data) == 0 {
 			return true
 		}
 		if state.stopped {
-			sendStreamPart(ctx, out, StreamError{Err: fmt.Errorf("event after terminal message_stop")})
+			sendStreamPart(ctx, out, StreamError{Err: localStreamError("event after terminal message_stop", rawEvent, rawTruncated, nil, metadata)})
 			return false
 		}
-		parts, err := state.handle(eventType, []byte(strings.Join(data, "\n")))
+		parts, err := state.handle(eventType, []byte(strings.Join(data, "\n")), rawEvent, rawTruncated, metadata)
 		if err != nil {
+			var apiErr *APICallError
+			if !errors.As(err, &apiErr) {
+				err = localStreamError(err.Error(), rawEvent, rawTruncated, err, metadata)
+			}
 			sendStreamPart(ctx, out, StreamError{Err: err})
 			return false
 		}
@@ -965,12 +1011,20 @@ func parseSSEStream(ctx context.Context, reader io.Reader, out chan<- StreamPart
 				return false
 			}
 		}
-		eventType, data = "", nil
+		eventType, data, rawEvent, rawTruncated = "", nil, nil, false
 		return !state.stopped
 	}
 	for {
 		line, err := buffered.ReadString('\n')
+		if err != nil && err != io.EOF {
+			if len(line) > 0 {
+				appendRaw(line)
+			}
+			sendStreamPart(ctx, out, StreamError{Err: localStreamError(err.Error(), rawEvent, rawTruncated, err, metadata)})
+			return
+		}
 		if len(line) > 0 {
+			appendRaw(line)
 			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 			if line == "" {
 				if !dispatch() {
@@ -992,15 +1046,11 @@ func parseSSEStream(ctx context.Context, reader io.Reader, out chan<- StreamPart
 			}
 		}
 		if err != nil {
-			if err != io.EOF {
-				sendStreamPart(ctx, out, StreamError{Err: err})
-				return
-			}
 			if !dispatch() {
 				return
 			}
 			if !state.stopped {
-				sendStreamPart(ctx, out, StreamError{Err: fmt.Errorf("anthropic stream ended before message_stop")})
+				sendStreamPart(ctx, out, StreamError{Err: localStreamError("anthropic stream ended before message_stop", rawEvent, rawTruncated, io.ErrUnexpectedEOF, metadata)})
 			}
 			return
 		}
@@ -1024,18 +1074,18 @@ type streamParserState struct {
 	finish                             StreamFinish
 }
 
-func (s *streamParserState) handle(eventType string, data []byte) ([]StreamPart, error) {
+func (s *streamParserState) handle(eventType string, data, raw []byte, truncated bool, metadata streamErrorMetadata) ([]StreamPart, error) {
 	if eventType == "" || eventType == "ping" {
 		return nil, nil
 	}
 	if s.messageDeltaSeen && eventType != "message_stop" {
-		return nil, fmt.Errorf("%s after message_delta", eventType)
+		return nil, localStreamError(fmt.Sprintf("%s after message_delta", eventType), raw, truncated, nil, metadata)
 	}
 	if eventType == "error" {
-		return nil, streamingAPIError(string(data))
+		return nil, streamingAPIError(data, raw, truncated, metadata)
 	}
 	if !s.started && eventType != "message_start" {
-		return nil, fmt.Errorf("%s before message_start", eventType)
+		return nil, localStreamError(fmt.Sprintf("%s before message_start", eventType), raw, truncated, nil, metadata)
 	}
 	switch eventType {
 	case "message_start":
@@ -1046,7 +1096,7 @@ func (s *streamParserState) handle(eventType string, data []byte) ([]StreamPart,
 			} `json:"message"`
 		}
 		if err := json.Unmarshal(data, &message); err != nil {
-			return nil, err
+			return nil, localStreamError("decode message_start", raw, truncated, err, metadata)
 		}
 		if message.Message.ID == "" || message.Message.Model == "" {
 			return nil, fmt.Errorf("message_start missing id or model")
@@ -1259,19 +1309,43 @@ func streamToolCallType(apiType string) string {
 	}
 }
 
-func streamingAPIError(data string) error {
+func streamingAPIError(data, raw []byte, truncated bool, metadata streamErrorMetadata) error {
 	var event struct {
 		Error APIError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(data), &event); err != nil {
-		return fmt.Errorf("decode error event: %w", err)
+	if err := json.Unmarshal(data, &event); err != nil {
+		return localStreamError("decode error event", raw, truncated, err, metadata)
 	}
-	if event.Error.Message == "" {
-		return fmt.Errorf("invalid error event payload")
+	if event.Error.Type == "" || event.Error.Message == "" {
+		return localStreamError("invalid error event payload", raw, truncated, nil, metadata)
 	}
-	status := http.StatusInternalServerError
-	if event.Error.Type == "overloaded_error" {
-		status = 529
+	status, known := anthropicErrorTypeStatus(event.Error.Type)
+	return &APICallError{Status: status, SyntheticStatus: known, Type: event.Error.Type, Message: event.Error.Message, Retryable: known && (status == http.StatusTooManyRequests || status >= 500), Headers: cloneHeader(metadata.headers), RequestID: metadata.requestID, Body: append([]byte(nil), raw...), Truncated: truncated}
+}
+
+func anthropicErrorTypeStatus(errorType string) (int, bool) {
+	switch errorType {
+	case "invalid_request_error":
+		return http.StatusBadRequest, true
+	case "authentication_error":
+		return http.StatusUnauthorized, true
+	case "permission_error":
+		return http.StatusForbidden, true
+	case "not_found_error":
+		return http.StatusNotFound, true
+	case "request_too_large":
+		return http.StatusRequestEntityTooLarge, true
+	case "rate_limit_error":
+		return http.StatusTooManyRequests, true
+	case "api_error":
+		return http.StatusInternalServerError, true
+	case "overloaded_error":
+		return 529, true
+	default:
+		return 0, false
 	}
-	return &APICallError{Status: status, Message: event.Error.Message, Retryable: status == 529 || status >= 500}
+}
+
+func localStreamError(message string, raw []byte, truncated bool, cause error, metadata streamErrorMetadata) *APICallError {
+	return &APICallError{Message: message, Headers: cloneHeader(metadata.headers), RequestID: metadata.requestID, Body: append([]byte(nil), raw...), Truncated: truncated, Cause: cause}
 }

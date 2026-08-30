@@ -34,15 +34,20 @@ func (e APIError) Error() string {
 }
 
 type APICallError struct {
-	Message   string
-	Type      string
-	Status    int
-	Retryable bool
-	Headers   http.Header
-	RequestID string
-	Body      []byte
-	Truncated bool
-	Cause     error
+	Message string
+	Type    string
+	Status  int
+	// SyntheticStatus reports whether Status was inferred from a provider error
+	// type rather than received as an HTTP response status. Adding exported
+	// fields can break external unkeyed APICallError literals; keyed literals
+	// remain source compatible.
+	SyntheticStatus bool
+	Retryable       bool
+	Headers         http.Header
+	RequestID       string
+	Body            []byte
+	Truncated       bool
+	Cause           error
 }
 
 func (e *APICallError) Error() string {
