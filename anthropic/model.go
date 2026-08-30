@@ -1292,7 +1292,7 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 		case "source", "web_search_result", "web_fetch_result":
 			return []StreamPart{StreamSource{SourceContent: SourceContent{SourceType: event.ContentBlock.Type, ID: event.ContentBlock.ID, URL: event.ContentBlock.URL, Title: event.ContentBlock.Title, MediaType: event.ContentBlock.MediaType, Filename: event.ContentBlock.Filename}, ProviderMetadata: event.ContentBlock.ProviderMetadata}}, nil
 		case "tool_result", "mcp_tool_result", "web_fetch_tool_result", "web_search_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result", "advisor_tool_result":
-			return []StreamPart{StreamToolResult{ToolResultContent: ToolResultContent{ToolCallID: event.ContentBlock.ToolUseID, Result: parseToolResultParts(event.ContentBlock.Content), IsError: event.ContentBlock.IsError, ProviderExecuted: event.ContentBlock.ProviderExecuted, Dynamic: event.ContentBlock.Dynamic, ProviderMetadata: event.ContentBlock.ProviderMetadata}}}, nil
+			return []StreamPart{StreamToolResult{ToolResultContent: ToolResultContent{Type: event.ContentBlock.Type, ToolCallID: event.ContentBlock.ToolUseID, Result: parseToolResultParts(event.ContentBlock.Content), IsError: event.ContentBlock.IsError, ProviderExecuted: event.ContentBlock.Type != "tool_result" || event.ContentBlock.ProviderExecuted, Dynamic: event.ContentBlock.Dynamic, ProviderMetadata: event.ContentBlock.ProviderMetadata}}}, nil
 		case "text":
 			return []StreamPart{StreamTextStart{ID: id}}, nil
 		default:
