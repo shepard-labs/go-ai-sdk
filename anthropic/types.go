@@ -331,10 +331,29 @@ type ResponseUsage struct {
 	CacheCreationInputTokens int
 	CacheReadInputTokens     int
 	ServiceTier              string
+	InferenceGeo             string
+	CacheCreation            *CacheCreationUsage
 	ServerToolUse            *UsageIteration
 	Executor                 *ExecutorIteration
 	Advisor                  *AdvisorIteration
+	OutputTokensDetails      *OutputTokensDetails
 	Iterations               []UsageIteration
+	Raw                      json.RawMessage
+}
+
+type CacheCreationUsage struct {
+	Ephemeral5mInputTokens uint64 `json:"ephemeral_5m_input_tokens"`
+	Ephemeral1hInputTokens uint64 `json:"ephemeral_1h_input_tokens"`
+}
+
+type ServerToolUsage struct {
+	WebSearchRequests     uint64 `json:"web_search_requests"`
+	WebFetchRequests      uint64 `json:"web_fetch_requests"`
+	CodeExecutionRequests uint64 `json:"code_execution_requests"`
+}
+
+type OutputTokensDetails struct {
+	ThinkingTokens *uint64 `json:"thinking_tokens"`
 }
 
 type UsageIteration struct{ InputTokens, OutputTokens int }
@@ -400,10 +419,13 @@ type Usage struct {
 	OutputTokens TokenUsage
 	TotalTokens  int
 	Iterations   []UsageIteration
+	Raw          json.RawMessage
 }
 
 type TokenUsage struct {
 	Total      int
+	Text       int
+	Reasoning  int
 	CacheRead  int
 	CacheWrite int
 }

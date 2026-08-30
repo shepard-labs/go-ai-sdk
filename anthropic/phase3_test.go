@@ -29,7 +29,7 @@ func TestPhase3DuplicateMessageStartAndUsageMerge(t *testing.T) {
 		t.Fatalf("parts = %#v", parts)
 	}
 	finish := parts[2].(StreamFinish)
-	if finish.Usage.InputTokens.Total != 3 || finish.Usage.InputTokens.CacheRead != 2 || finish.Usage.OutputTokens.Total != 4 {
+	if finish.Usage.InputTokens.Total != 5 || finish.Usage.InputTokens.CacheRead != 2 || finish.Usage.OutputTokens.Total != 4 || finish.Usage.TotalTokens != 9 {
 		t.Fatalf("usage = %#v", finish.Usage)
 	}
 

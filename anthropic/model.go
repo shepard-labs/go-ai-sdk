@@ -650,12 +650,38 @@ type apiContextManagementEditResponse struct {
 }
 
 type apiUsage struct {
-	InputTokens              int              `json:"input_tokens"`
-	OutputTokens             int              `json:"output_tokens"`
-	CacheCreationInputTokens int              `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int              `json:"cache_read_input_tokens"`
-	ServiceTier              string           `json:"service_tier"`
-	Iterations               []UsageIteration `json:"iterations"`
+	InputTokens              *uint64                    `json:"input_tokens"`
+	OutputTokens             *uint64                    `json:"output_tokens"`
+	CacheCreationInputTokens *uint64                    `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     *uint64                    `json:"cache_read_input_tokens"`
+	ServiceTier              *string                    `json:"service_tier"`
+	InferenceGeo             *string                    `json:"inference_geo"`
+	CacheCreation            *CacheCreationUsage        `json:"cache_creation"`
+	ServerToolUse            *ServerToolUsage           `json:"server_tool_use"`
+	OutputTokensDetails      *OutputTokensDetails       `json:"output_tokens_details"`
+	Iterations               []apiUsageIteration        `json:"iterations"`
+	Raw                      map[string]json.RawMessage `json:"-"`
+	rawBytes                 json.RawMessage
+}
+
+type apiUsageIteration struct {
+	Type                     string `json:"type"`
+	Model                    string `json:"model,omitempty"`
+	InputTokens              uint64 `json:"input_tokens"`
+	OutputTokens             uint64 `json:"output_tokens"`
+	CacheCreationInputTokens uint64 `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     uint64 `json:"cache_read_input_tokens,omitempty"`
+}
+
+func (u *apiUsage) UnmarshalJSON(data []byte) error {
+	type plain apiUsage
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*u = apiUsage(decoded)
+	u.rawBytes = append(u.rawBytes[:0], data...)
+	return json.Unmarshal(data, &u.Raw)
 }
 
 func parseGenerateResponse(body []byte) (*GenerateResult, error) {
@@ -663,14 +689,10 @@ func parseGenerateResponse(body []byte) (*GenerateResult, error) {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, err
 	}
-	usage := UsageFromResponseUsage(ResponseUsage{
-		InputTokens:              response.Usage.InputTokens,
-		OutputTokens:             response.Usage.OutputTokens,
-		CacheCreationInputTokens: response.Usage.CacheCreationInputTokens,
-		CacheReadInputTokens:     response.Usage.CacheReadInputTokens,
-		ServiceTier:              response.Usage.ServiceTier,
-		Iterations:               response.Usage.Iterations,
-	})
+	usage, err := convertAPIUsage(response.Usage)
+	if err != nil {
+		return nil, err
+	}
 	metadata := MessageMetadata{
 		"id":             response.ID,
 		"model":          response.Model,
@@ -691,6 +713,36 @@ func parseGenerateResponse(body []byte) (*GenerateResult, error) {
 		ProviderMetadata: ProviderMetadata{"anthropic": response},
 		MessageMetadata:  metadata,
 	}, nil
+}
+
+func convertAPIUsage(usage apiUsage) (Usage, error) {
+	raw := append(json.RawMessage(nil), usage.rawBytes...)
+	if raw == nil {
+		var err error
+		raw, err = json.Marshal(usage.Raw)
+		if err != nil {
+			return Usage{}, err
+		}
+	}
+	return usageFromAPIUsage(apiResponseUsage{
+		InputTokens: uint64Value(usage.InputTokens), OutputTokens: uint64Value(usage.OutputTokens),
+		CacheCreationInputTokens: uint64Value(usage.CacheCreationInputTokens), CacheReadInputTokens: uint64Value(usage.CacheReadInputTokens),
+		ServiceTier: stringValue(usage.ServiceTier), InferenceGeo: stringValue(usage.InferenceGeo), CacheCreation: usage.CacheCreation,
+		ServerToolUse: usage.ServerToolUse, OutputTokensDetails: usage.OutputTokensDetails, Iterations: usage.Iterations, Raw: raw,
+	})
+}
+
+func uint64Value(value *uint64) uint64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func convertJSONToolCallToText(content []Content) []Content {
@@ -1265,26 +1317,12 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 			return nil, fmt.Errorf("message_delta with active content blocks")
 		}
 		s.messageDeltaSeen = true
-		usage := s.initialUsage
-		if event.Usage.InputTokens != 0 {
-			usage.InputTokens = event.Usage.InputTokens
+		usage := mergeAPIUsage(s.initialUsage, event.Usage)
+		converted, err := convertAPIUsage(usage)
+		if err != nil {
+			return nil, err
 		}
-		if event.Usage.OutputTokens != 0 {
-			usage.OutputTokens = event.Usage.OutputTokens
-		}
-		if event.Usage.CacheCreationInputTokens != 0 {
-			usage.CacheCreationInputTokens = event.Usage.CacheCreationInputTokens
-		}
-		if event.Usage.CacheReadInputTokens != 0 {
-			usage.CacheReadInputTokens = event.Usage.CacheReadInputTokens
-		}
-		if event.Usage.ServiceTier != "" {
-			usage.ServiceTier = event.Usage.ServiceTier
-		}
-		if event.Usage.Iterations != nil {
-			usage.Iterations = event.Usage.Iterations
-		}
-		s.finish = StreamFinish{FinishReason: FinishReasonFromStopReason(event.Delta.StopReason), Usage: UsageFromResponseUsage(ResponseUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CacheCreationInputTokens: usage.CacheCreationInputTokens, CacheReadInputTokens: usage.CacheReadInputTokens, ServiceTier: usage.ServiceTier, Iterations: usage.Iterations})}
+		s.finish = StreamFinish{FinishReason: FinishReasonFromStopReason(event.Delta.StopReason), Usage: converted}
 		return nil, nil
 	case "message_stop":
 		if len(s.blocks) != 0 {
@@ -1296,6 +1334,51 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 		return nil, fmt.Errorf("unsupported event type %q", eventType)
 	}
 	return nil, nil
+}
+
+func mergeAPIUsage(previous, later apiUsage) apiUsage {
+	merged := previous
+	if later.InputTokens != nil {
+		merged.InputTokens = later.InputTokens
+	}
+	if later.OutputTokens != nil {
+		merged.OutputTokens = later.OutputTokens
+	}
+	if later.CacheCreationInputTokens != nil {
+		merged.CacheCreationInputTokens = later.CacheCreationInputTokens
+	}
+	if later.CacheReadInputTokens != nil {
+		merged.CacheReadInputTokens = later.CacheReadInputTokens
+	}
+	if later.ServiceTier != nil {
+		merged.ServiceTier = later.ServiceTier
+	}
+	if later.InferenceGeo != nil {
+		merged.InferenceGeo = later.InferenceGeo
+	}
+	if later.CacheCreation != nil {
+		merged.CacheCreation = later.CacheCreation
+	}
+	if later.ServerToolUse != nil {
+		merged.ServerToolUse = later.ServerToolUse
+	}
+	if later.OutputTokensDetails != nil {
+		merged.OutputTokensDetails = later.OutputTokensDetails
+	}
+	if later.Iterations != nil {
+		merged.Iterations = later.Iterations
+	}
+	merged.Raw = make(map[string]json.RawMessage, len(previous.Raw)+len(later.Raw))
+	for key, value := range previous.Raw {
+		merged.Raw[key] = append([]byte(nil), value...)
+	}
+	for key, value := range later.Raw {
+		merged.Raw[key] = append([]byte(nil), value...)
+	}
+	// A merged stream has no single original usage object, so Raw is a
+	// canonical serialization of the combined fields.
+	merged.rawBytes = nil
+	return merged
 }
 
 func streamToolCallType(apiType string) string {
