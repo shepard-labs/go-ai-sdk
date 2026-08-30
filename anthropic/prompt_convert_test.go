@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestPhase2ResponseRequestReplay(t *testing.T) {
+func TestPromptConvertResponseRequestReplay(t *testing.T) {
 	body := []byte(`{"id":"msg","model":"claude","role":"assistant","stop_reason":"end_turn","usage":{},"content":[{"type":"server_tool_use","id":"srv","name":"web_search","input":{"query":"go"},"dynamic":true,"caller":{"type":"code_execution_20250825","tool_id":"code"},"future":"kept","provider_metadata":{"bad":true}},{"type":"web_search_tool_result","tool_use_id":"srv","caller":{"type":"direct"},"content":[{"type":"web_search_result","url":"https://example.com","title":"Example","encrypted_content":"cipher","page_age":"today"}],"future_result":7},{"type":"text","text":"answer","citations":[{"type":"web_search_result_location","encrypted_index":"index","cited_text":"quote"}]}]}`)
 	result, err := parseGenerateResponse(body)
 	if err != nil {
@@ -28,7 +28,7 @@ func TestPhase2ResponseRequestReplay(t *testing.T) {
 	}
 }
 
-func TestPhase2UnknownSpecializedResultPayloadSurvives(t *testing.T) {
+func TestPromptConvertUnknownSpecializedResultPayloadSurvives(t *testing.T) {
 	body := []byte(`{"id":"msg","model":"claude","role":"assistant","stop_reason":"end_turn","usage":{},"content":[{"type":"text_editor_code_execution_tool_result","tool_use_id":"edit","content":{"type":"text_editor_code_execution_view_result","content":"file","file_type":"text","num_lines":1,"future_nested":true}}]}`)
 	result, err := parseGenerateResponse(body)
 	if err != nil {
@@ -43,7 +43,7 @@ func TestPhase2UnknownSpecializedResultPayloadSurvives(t *testing.T) {
 	}
 }
 
-func TestPhase2ToolInputNormalization(t *testing.T) {
+func TestPromptConvertToolInputNormalization(t *testing.T) {
 	for _, input := range []json.RawMessage{nil, {}, []byte(`bad`), []byte(`null`), []byte(`[]`), []byte(`1`), []byte(`"x"`)} {
 		_, messages := convertPrompt([]Message{AssistantMessage{Content: []AssistantContent{ToolCallContent{ToolCallID: "id", ToolName: "tool", Input: input}}}})
 		got, _ := json.Marshal(messages[0].Content[0].Input)
@@ -63,7 +63,7 @@ func TestPhase2ToolInputNormalization(t *testing.T) {
 // packages/anthropic/src/convert-to-anthropic-prompt.test.ts:1771-1894:
 // [text, client tool_use, server_tool_use, provider result] ->
 // [text, server_tool_use, provider result, client tool_use].
-func TestPhase2MixedToolOrderingIsStableAndLocal(t *testing.T) {
+func TestPromptConvertMixedToolOrderingIsStableAndLocal(t *testing.T) {
 	contents := []AssistantContent{
 		TextContent{Text: "A"},
 		ToolCallContent{ToolCallID: "c1", ToolName: "client1", Input: json.RawMessage(`{}`)},
@@ -82,7 +82,7 @@ func TestPhase2MixedToolOrderingIsStableAndLocal(t *testing.T) {
 	}
 }
 
-func TestPhase2TypedFieldsWinOverRaw(t *testing.T) {
+func TestPromptConvertTypedFieldsWinOverRaw(t *testing.T) {
 	call := ToolCallContent{ToolCallID: "typed-id", ToolName: "typed-name", Input: json.RawMessage(`{"typed":true}`), Raw: map[string]json.RawMessage{
 		"type": json.RawMessage(`"server_tool_use"`), "id": json.RawMessage(`"raw-id"`), "name": json.RawMessage(`"raw-name"`), "input": json.RawMessage(`{"raw":true}`), "provider_metadata": json.RawMessage(`{"bad":true}`), "future": json.RawMessage(`42`),
 	}}
@@ -93,7 +93,7 @@ func TestPhase2TypedFieldsWinOverRaw(t *testing.T) {
 	}
 }
 
-func TestPhase2TypedNestedResultWinsAndClearsRaw(t *testing.T) {
+func TestPromptConvertTypedNestedResultWinsAndClearsRaw(t *testing.T) {
 	result := ToolResultContent{Type: "web_search_tool_result", ToolCallID: "id", Result: []ToolResultPart{WebSearchResult{Type: "web_search_result", URL: "typed", Title: ""}}, RawContent: json.RawMessage(`[{"type":"web_search_result","url":"raw","title":"raw title","encrypted_content":"raw cipher","page_age":"old","future":{"kept":true}}]`)}
 	_, messages := convertPrompt([]Message{AssistantMessage{Content: []AssistantContent{result}}})
 	got, _ := json.Marshal(messages[0].Content[0])
@@ -103,7 +103,7 @@ func TestPhase2TypedNestedResultWinsAndClearsRaw(t *testing.T) {
 	}
 }
 
-func TestPhase2RawSupportedKeysCannotReappearAfterClearing(t *testing.T) {
+func TestPromptConvertRawSupportedKeysCannotReappearAfterClearing(t *testing.T) {
 	block := apiContentBlock{Type: "web_search_result", Raw: map[string]json.RawMessage{"encrypted_content": json.RawMessage(`"cipher"`), "page_age": json.RawMessage(`"old"`), "source": json.RawMessage(`{"future":true}`), "future": json.RawMessage(`1`)}}
 	got, _ := json.Marshal(block)
 	if string(got) != `{"future":1,"source":{"future":true},"type":"web_search_result"}` {
@@ -117,7 +117,7 @@ func TestPhase2RawSupportedKeysCannotReappearAfterClearing(t *testing.T) {
 	}
 }
 
-func TestPhase2OrdinaryToolResultRemainsClientOwnedDuringOrdering(t *testing.T) {
+func TestPromptConvertOrdinaryToolResultRemainsClientOwnedDuringOrdering(t *testing.T) {
 	blocks := convertAssistantContent([]AssistantContent{
 		ToolCallContent{ToolCallID: "call", ToolName: "client", Input: json.RawMessage(`{}`)},
 		ToolResultContent{ToolCallID: "call", Result: []ToolResultPart{ToolResultText{Text: "client result"}}},
@@ -132,7 +132,7 @@ func TestPhase2OrdinaryToolResultRemainsClientOwnedDuringOrdering(t *testing.T) 
 	}
 }
 
-func TestPhase2UserProviderResultPreservesNativeShape(t *testing.T) {
+func TestPromptConvertUserProviderResultPreservesNativeShape(t *testing.T) {
 	content := ToolResultContent{Type: "mcp_tool_result", ToolCallID: "mcp", IsError: true, Dynamic: true, Caller: &ToolCallCallerInfo{Type: "direct"}, Result: []ToolResultPart{ToolResultText{Text: "typed"}}, Raw: map[string]json.RawMessage{"future": json.RawMessage(`7`)}}
 	_, messages := convertPrompt([]Message{UserMessage{Content: []UserContent{content}}})
 	got, _ := json.Marshal(messages[0].Content[0])
@@ -143,7 +143,7 @@ func TestPhase2UserProviderResultPreservesNativeShape(t *testing.T) {
 	}
 }
 
-func TestPhase2WebFetchResultPreservesNestedDocumentSource(t *testing.T) {
+func TestPromptConvertWebFetchResultPreservesNestedDocumentSource(t *testing.T) {
 	body := []byte(`{"id":"msg","model":"claude","role":"assistant","stop_reason":"end_turn","usage":{},"content":[{"type":"web_fetch_tool_result","tool_use_id":"fetch","content":[{"type":"web_fetch_result","url":"https://page.example","retrieved_at":"today","content":{"type":"document","source":{"type":"url","media_type":"text/html","data":"encoded","url":"https://source.example/doc"}}}]}]}`)
 	result, err := parseGenerateResponse(body)
 	if err != nil {
@@ -162,7 +162,7 @@ func TestPhase2WebFetchResultPreservesNestedDocumentSource(t *testing.T) {
 	}
 }
 
-func TestPhase2UnknownResultArrayEntryRetainsOrderAndTypedOverrides(t *testing.T) {
+func TestPromptConvertUnknownResultArrayEntryRetainsOrderAndTypedOverrides(t *testing.T) {
 	body := []byte(`{"id":"msg","model":"claude","role":"assistant","stop_reason":"end_turn","usage":{},"content":[{"type":"web_search_tool_result","tool_use_id":"search","content":[{"type":"web_search_result","url":"first-raw","title":"First"},{"type":"future_result","value":7},{"type":"web_search_result","url":"last-raw","title":"Last"}]}]}`)
 	result, err := parseGenerateResponse(body)
 	if err != nil {
@@ -185,7 +185,7 @@ func TestPhase2UnknownResultArrayEntryRetainsOrderAndTypedOverrides(t *testing.T
 	}
 }
 
-func TestPhase2CallerPreservesUnknownFieldsAndTypedFieldsWin(t *testing.T) {
+func TestPromptConvertCallerPreservesUnknownFieldsAndTypedFieldsWin(t *testing.T) {
 	body := []byte(`{"id":"msg","model":"claude","role":"assistant","stop_reason":"end_turn","usage":{},"content":[{"type":"server_tool_use","id":"srv","name":"tool","input":{},"caller":{"type":"raw-type","tool_id":"raw-tool","future":{"kept":true}}}]}`)
 	result, err := parseGenerateResponse(body)
 	if err != nil {
@@ -202,7 +202,7 @@ func TestPhase2CallerPreservesUnknownFieldsAndTypedFieldsWin(t *testing.T) {
 	}
 }
 
-func TestPhase2AssistantTextPreservesUnknownFieldsAndTypedFieldsWin(t *testing.T) {
+func TestPromptConvertAssistantTextPreservesUnknownFieldsAndTypedFieldsWin(t *testing.T) {
 	body := []byte(`{"id":"msg","model":"claude","role":"assistant","stop_reason":"end_turn","usage":{},"content":[{"type":"text","text":"raw text","citations":[{"type":"raw"}],"future":{"kept":true}}]}`)
 	result, err := parseGenerateResponse(body)
 	if err != nil {
@@ -219,7 +219,7 @@ func TestPhase2AssistantTextPreservesUnknownFieldsAndTypedFieldsWin(t *testing.T
 	}
 }
 
-func TestPhase2MCPAndProviderBlocksRoundTripFromResponse(t *testing.T) {
+func TestPromptConvertMCPAndProviderBlocksRoundTripFromResponse(t *testing.T) {
 	body := []byte(`{"id":"msg","model":"claude","role":"assistant","stop_reason":"end_turn","usage":{},"content":[{"type":"tool_use","id":"client","name":"client_tool","input":{"value":1},"dynamic":true,"caller":{"type":"direct","future":"caller"}},{"type":"mcp_tool_use","id":"mcp","name":"lookup","server_name":"tools","input":{"query":"go"},"dynamic":true,"future_call":true},{"type":"mcp_tool_result","tool_use_id":"mcp","content":[{"type":"text","text":"found"}],"dynamic":true,"caller":{"type":"direct"},"future_result":2}]}`)
 	result, err := parseGenerateResponse(body)
 	if err != nil {

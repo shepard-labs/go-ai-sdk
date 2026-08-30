@@ -11,30 +11,7 @@ import (
 	"time"
 )
 
-func terminalAPIError(t *testing.T, reader io.Reader) (*APICallError, []StreamPart) {
-	t.Helper()
-	out := make(chan StreamPart, 32)
-	parseSSEStreamWithLimit(context.Background(), reader, out, nil, 1024)
-	close(out)
-	var parts []StreamPart
-	for part := range out {
-		parts = append(parts, part)
-	}
-	if len(parts) == 0 {
-		t.Fatal("no stream parts")
-	}
-	streamErr, ok := parts[len(parts)-1].(StreamError)
-	if !ok {
-		t.Fatalf("terminal part = %#v, want StreamError", parts[len(parts)-1])
-	}
-	var apiErr *APICallError
-	if !errors.As(streamErr.Err, &apiErr) {
-		t.Fatalf("error = %T %v, want APICallError", streamErr.Err, streamErr.Err)
-	}
-	return apiErr, parts
-}
-
-func TestPhase4ProviderErrorMappingAndDiagnostics(t *testing.T) {
+func TestStreamErrorProviderMappingAndDiagnostics(t *testing.T) {
 	cases := []struct {
 		typ       string
 		status    int
@@ -60,7 +37,7 @@ func TestPhase4ProviderErrorMappingAndDiagnostics(t *testing.T) {
 	}
 }
 
-func TestPhase4UnknownMalformedAndProtocolErrors(t *testing.T) {
+func TestStreamErrorUnknownMalformedAndProtocolErrors(t *testing.T) {
 	for _, raw := range []string{
 		event("error", `{"error":{"type":"new_error","message":"failed"}}`),
 		event("error", `{"error":{"type":"api_error"}}`),
@@ -74,7 +51,7 @@ func TestPhase4UnknownMalformedAndProtocolErrors(t *testing.T) {
 	}
 }
 
-func TestPhase4MalformedErrorPreservesDecodeCauseAndRawRecord(t *testing.T) {
+func TestStreamErrorMalformedErrorPreservesDecodeCauseAndRawRecord(t *testing.T) {
 	raw := event("error", `{"error":`)
 	err, parts := terminalAPIError(t, strings.NewReader(raw))
 	var syntaxErr *json.SyntaxError
@@ -83,7 +60,7 @@ func TestPhase4MalformedErrorPreservesDecodeCauseAndRawRecord(t *testing.T) {
 	}
 }
 
-func TestPhase4IncompleteFinalRecordPreservesDecodeCause(t *testing.T) {
+func TestStreamErrorIncompleteFinalRecordPreservesDecodeCause(t *testing.T) {
 	partial := "event: message_start\ndata: {\"message\":{\"id\":\"m\"}"
 	err, parts := terminalAPIError(t, strings.NewReader(partial))
 	var syntaxErr *json.SyntaxError
@@ -92,7 +69,7 @@ func TestPhase4IncompleteFinalRecordPreservesDecodeCause(t *testing.T) {
 	}
 }
 
-func TestPhase4ErrorDiagnosticTruncation(t *testing.T) {
+func TestStreamErrorDiagnosticTruncation(t *testing.T) {
 	raw := event("error", `{"error":{"type":"api_error","message":"`+strings.Repeat("x", 128)+`"}}`)
 	out := make(chan StreamPart, 1)
 	parseSSEStreamWithLimit(context.Background(), strings.NewReader(raw), out, nil, 32)
@@ -104,21 +81,7 @@ func TestPhase4ErrorDiagnosticTruncation(t *testing.T) {
 	}
 }
 
-type bytesThenErrorReader struct {
-	data []byte
-	err  error
-	done bool
-}
-
-func (r *bytesThenErrorReader) Read(p []byte) (int, error) {
-	if r.done {
-		return 0, r.err
-	}
-	r.done = true
-	return copy(p, r.data), r.err
-}
-
-func TestPhase4PartialReaderErrorIsTerminalAndPreserved(t *testing.T) {
+func TestStreamErrorPartialReaderErrorIsTerminalAndPreserved(t *testing.T) {
 	cause := errors.New("reader failed")
 	partial := []byte("event: message_start\ndata: {\"message\":{\"id\":\"m\",\"model\":\"c\"}}")
 	out := make(chan StreamPart, 8)
@@ -138,7 +101,7 @@ func TestPhase4PartialReaderErrorIsTerminalAndPreserved(t *testing.T) {
 	}
 }
 
-func TestPhase4CompleteEventsBeforeReaderError(t *testing.T) {
+func TestStreamErrorCompleteEventsBeforeReaderError(t *testing.T) {
 	cause := errors.New("reader failed")
 	raw := event("message_start", `{"message":{"id":"m","model":"c"}}`) +
 		event("content_block_start", `{"index":0,"content_block":{"type":"text"}}`) +
@@ -171,7 +134,7 @@ func TestPhase4CompleteEventsBeforeReaderError(t *testing.T) {
 	}
 }
 
-func TestPhase4StreamingErrorResponseMetadata(t *testing.T) {
+func TestStreamErrorResponseMetadata(t *testing.T) {
 	for _, headerName := range []string{"x-request-id", "request-id"} {
 		t.Run(headerName, func(t *testing.T) {
 			headers := make(http.Header)
@@ -193,7 +156,7 @@ func TestPhase4StreamingErrorResponseMetadata(t *testing.T) {
 	}
 }
 
-func TestPhase4DoStreamErrorPreservesSuccessfulResponseMetadata(t *testing.T) {
+func TestStreamErrorPreservesSuccessfulResponseMetadata(t *testing.T) {
 	headers := http.Header{"Request-Id": []string{"req-stream"}, "X-Trace": []string{"trace"}}
 	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: roundTripFetcher{fn: func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: headers, Body: io.NopCloser(strings.NewReader(event("error", `{"error":{"type":"api_error","message":"failed"}}`))), Request: req}, nil
@@ -219,7 +182,7 @@ func TestPhase4DoStreamErrorPreservesSuccessfulResponseMetadata(t *testing.T) {
 	}
 }
 
-func TestPhase4CancelledTerminalSendDoesNotBlock(t *testing.T) {
+func TestStreamErrorCancelledTerminalSendDoesNotBlock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	out := make(chan StreamPart)
 	done := make(chan struct{})
@@ -235,7 +198,7 @@ func TestPhase4CancelledTerminalSendDoesNotBlock(t *testing.T) {
 	}
 }
 
-func TestPhase4HTTPSetupErrorPreservesResponseMetadataAndPartialBody(t *testing.T) {
+func TestStreamErrorHTTPSetupPreservesResponseMetadataAndPartialBody(t *testing.T) {
 	cause := errors.New("body failed")
 	resp := &http.Response{StatusCode: 503, Header: http.Header{"X-Request-Id": []string{"req-1"}}, Body: io.NopCloser(&bytesThenErrorReader{data: []byte(`{"error":{"type":"api_error","message":"partial"}}`), err: cause})}
 	body, truncated, readErr := readLimited(resp.Body, 32)

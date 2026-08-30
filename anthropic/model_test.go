@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -231,12 +232,6 @@ func TestToolRequestsRetrySafety(t *testing.T) {
 		})
 	}
 }
-
-type roundTripFetcher struct {
-	fn func(*http.Request) (*http.Response, error)
-}
-
-func (f roundTripFetcher) Do(req *http.Request) (*http.Response, error) { return f.fn(req) }
 
 func TestPromptConvertTextOnly(t *testing.T) {
 	system, messages := convertPrompt([]Message{
@@ -851,12 +846,1068 @@ func TestSupportURLs(t *testing.T) {
 	}
 }
 
-func jsonResponse(status int, body string) *http.Response {
-	resp := textResponse(status, body)
-	resp.Header.Set("Content-Type", "application/json")
-	return resp
+func TestThinkingEnabledRequest(t *testing.T) {
+	temp := 0.7
+	topK := 5
+	topP := 0.9
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: 2048}}).(*anthropicLanguageModel)
+	req, warnings := model.buildRequest(GenerateOptions{MaxTokens: 100, Temperature: &temp, TopK: &topK, TopP: &topP}, false)
+	if req.Thinking == nil || req.Thinking.Type != "enabled" || req.Thinking.BudgetTokens != 2048 || req.MaxTokens != 2148 {
+		t.Fatalf("request = %#v", req)
+	}
+	if req.Temperature != nil || req.TopK != nil || req.TopP != nil || len(warnings) != 3 {
+		t.Fatalf("request = %#v warnings = %#v", req, warnings)
+	}
 }
 
-func textResponse(status int, body string) *http.Response {
-	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+func TestThinkingEnabledDefaultBudget(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeEnabled}}).(*anthropicLanguageModel)
+	req, warnings := model.buildRequest(GenerateOptions{MaxTokens: 1}, false)
+	if req.Thinking.BudgetTokens != 1024 || req.MaxTokens != 1025 || len(warnings) != 1 || warnings[0].Type != "compatibility" {
+		t.Fatalf("request = %#v warnings = %#v", req, warnings)
+	}
+}
+
+func TestThinkingAdaptiveRequest(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeAdaptive, Display: "summarized"}}).(*anthropicLanguageModel)
+	req, _ := model.buildRequest(GenerateOptions{}, false)
+	if req.Thinking == nil || req.Thinking.Type != "adaptive" || req.Thinking.Display != "summarized" {
+		t.Fatalf("request = %#v", req)
+	}
+}
+
+func TestThinkingDisabledRequest(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeDisabled}}).(*anthropicLanguageModel)
+	req, _ := model.buildRequest(GenerateOptions{}, false)
+	if req.Thinking == nil || req.Thinking.Type != "disabled" {
+		t.Fatalf("request = %#v", req)
+	}
+}
+
+func TestPerRequestThinkingOverridesModelDefault(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: 2048}}).(*anthropicLanguageModel)
+	req, _ := model.buildRequest(GenerateOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeDisabled}}, false)
+	if req.Thinking == nil || req.Thinking.Type != "disabled" || req.Thinking.BudgetTokens != 0 {
+		t.Fatalf("request = %#v", req)
+	}
+}
+
+func TestStructuredOutputOutputFormatMode(t *testing.T) {
+	schema := map[string]any{"type": "object", "default": map[string]any{"bad": true}, "properties": map[string]any{"name": map[string]any{"type": "string"}}}
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-4-5", ModelOptions{StructuredOutputMode: StructuredOutputModeOutputFormat}).(*anthropicLanguageModel)
+	req, _ := model.buildRequest(GenerateOptions{StructuredOutput: &StructuredOutput{Name: "out", Schema: schema}}, false)
+	if req.OutputConfig == nil || req.OutputConfig.Format.Type != "json_schema" || len(req.Tools) != 0 {
+		t.Fatalf("request = %#v", req)
+	}
+	sanitized := req.OutputConfig.Format.Schema.(map[string]any)
+	if _, ok := sanitized["default"]; ok {
+		t.Fatalf("schema was not sanitized: %#v", sanitized)
+	}
+}
+
+func TestStructuredOutputJsonToolMode(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{StructuredOutputMode: StructuredOutputModeJSONTool}).(*anthropicLanguageModel)
+	req, _ := model.buildRequest(GenerateOptions{StructuredOutput: &StructuredOutput{Schema: map[string]any{"type": "object"}}}, false)
+	if len(req.Tools) != 1 || req.Tools[0].Name != "json" || req.ToolChoice.Type != "tool" || req.ToolChoice.Name != "json" || !req.ToolChoice.DisableParallelToolUse || !req.DisableParallelToolUse {
+		t.Fatalf("request = %#v", req)
+	}
+}
+
+func TestStructuredOutputAutoMode(t *testing.T) {
+	supported := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-4-5", ModelOptions{StructuredOutputMode: StructuredOutputModeAuto}).(*anthropicLanguageModel)
+	req, _ := supported.buildRequest(GenerateOptions{StructuredOutput: &StructuredOutput{Schema: map[string]any{"type": "object"}}}, false)
+	if req.OutputConfig == nil || len(req.Tools) != 0 {
+		t.Fatalf("supported request = %#v", req)
+	}
+
+	unsupported := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{StructuredOutputMode: StructuredOutputModeAuto}).(*anthropicLanguageModel)
+	req, _ = unsupported.buildRequest(GenerateOptions{StructuredOutput: &StructuredOutput{Schema: map[string]any{"type": "object"}}}, false)
+	if req.OutputConfig == nil || req.OutputConfig.Format != nil || len(req.Tools) != 1 || req.Tools[0].Name != "json" {
+		t.Fatalf("unsupported request = %#v", req)
+	}
+}
+
+func TestCacheControlInRequest(t *testing.T) {
+	cache := &CacheControl{Type: "ephemeral", TTL: "5m"}
+	system, messages := convertPrompt([]Message{
+		SystemMessage{Content: "system", CacheControl: cache},
+		UserMessage{Content: []UserContent{CacheControlledTextContent{Text: "hello", CacheControl: cache}}},
+		AssistantMessage{Content: []AssistantContent{CacheControlledTextContent{Text: "answer", CacheControl: cache}}},
+	})
+	if system[0].CacheControl != cache || messages[0].Content[0].CacheControl != cache || messages[1].Content[0].CacheControl != cache {
+		t.Fatalf("system = %#v messages = %#v", system, messages)
+	}
+}
+
+func TestMCPToolStreaming(t *testing.T) {
+	sse := "event: message_start\ndata: {\"message\":{\"id\":\"msg\",\"model\":\"claude-3-haiku-20240307\",\"usage\":{\"input_tokens\":3}}}\n\n" +
+		"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"mcp_tool_use\",\"id\":\"mcp\",\"name\":\"tool\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"mcp_tool_use_delta\",\"partial_json\":\"{\\\"a\\\":1}\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"index\":0}\n\n" +
+		"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+		"event: message_stop\ndata: {}\n\n"
+	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return textResponse(200, sse), nil }}
+	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
+	result, err := model.DoStream(context.Background(), StreamOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []StreamPart
+	for part := range result.Stream {
+		parts = append(parts, part)
+	}
+	if len(parts) != 7 {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if parts[2].(StreamToolInputStart).ID != "0" || parts[2].(StreamToolInputStart).ToolName != "tool" || parts[3].(StreamToolInputDelta).Delta.(InputJSONDelta).PartialJSON != `{"a":1}` || parts[4].(StreamToolInputEnd).ID != "0" {
+		t.Fatalf("parts = %#v", parts)
+	}
+	call := parts[5].(StreamToolCall)
+	if call.Type != "mcp-tool-call" || call.ToolCallID != "mcp" || call.ToolName != "tool" || string(call.Input) != `{"a":1}` {
+		t.Fatalf("call = %#v", call)
+	}
+	finish := parts[6].(StreamFinish)
+	if finish.FinishReason != FinishReasonToolCalls || finish.Usage.InputTokens.Total != 3 || finish.Usage.OutputTokens.Total != 1 {
+		t.Fatalf("finish = %#v", finish)
+	}
+}
+
+func TestMCPServerContainerAndContextRequest(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{
+		MCPServers: []MCPServer{{Type: "url", Name: "server", URL: "https://mcp", ToolConfiguration: &ToolConfiguration{Enabled: true, AllowedTools: []string{"tool"}}}},
+		Container:  &Container{ID: "container", Skills: []Skill{{Type: "skill", SkillID: "s", Version: "1"}}},
+		ContextManagement: &ContextManagement{Edits: []ContextManagementEdit{
+			ClearToolUsesEdit{Type: "clear_tool_uses", Trigger: InputTokensTrigger{Value: 100}, Keep: ToolUsesCount{Value: 1}, ClearAtLeast: ToolUsesCount{Value: 2}, ClearToolInputs: true, ExcludeTools: []string{"keep"}},
+			ClearThinkingEdit{Type: "clear_thinking", Keep: ThinkingTurnsCount{Value: 1}},
+			CompactEdit{Type: "compact", Trigger: ToolUsesTrigger{Value: 3}, PauseAfterCompaction: true, Instructions: "compact"},
+		}},
+	}).(*anthropicLanguageModel)
+	req, _ := model.buildRequest(GenerateOptions{}, false)
+	if req.MCPServers[0].ToolConfiguration.AllowedTools[0] != "tool" || req.Container.Skills[0].SkillID != "s" || len(req.ContextManagement.Edits) != 3 {
+		t.Fatalf("request = %#v", req)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Type != "mcp_toolset" || req.Tools[0].MCPServerName != "server" || req.Tools[0].DefaultConfig == nil || req.Tools[0].DefaultConfig.Enabled == nil || *req.Tools[0].DefaultConfig.Enabled || req.Tools[0].Configs["tool"].Enabled == nil || !*req.Tools[0].Configs["tool"].Enabled {
+		t.Fatalf("request = %#v", req)
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(data) {
+		t.Fatalf("invalid json: %s", data)
+	}
+	if bytes.Contains(data, []byte("tool_configuration")) {
+		t.Fatalf("deprecated tool_configuration serialized: %s", data)
+	}
+}
+
+func TestContextManagementResponseParsing(t *testing.T) {
+	body := []byte(`{"content":[],"context_management":{"applied_edits":[{"type":"clear_tool_uses","cleared_tool_uses":2},{"type":"clear_thinking","cleared_thinking_turns":1},{"type":"compact","compacted":true}]}}`)
+	result, err := parseGenerateResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := result.MessageMetadata["contextManagement"].(ContextManagementResponse)
+	if len(ctx.AppliedEdits) != 3 || ctx.AppliedEdits[0].(ClearToolUsesResponse).ClearedToolUses != 2 || ctx.AppliedEdits[1].(ClearThinkingResponse).ClearedThinkingTurns != 1 || !ctx.AppliedEdits[2].(CompactResponse).Compacted {
+		t.Fatalf("context = %#v", ctx)
+	}
+}
+
+func TestJsonToolResponseConvertedToText(t *testing.T) {
+	body := []byte(`{"content":[{"type":"tool_use","id":"json","name":"json","input":{"ok":true}}]}`)
+	result, err := parseGenerateResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content[0].(TextContent).Text != `{"ok":true}` {
+		t.Fatalf("content = %#v", result.Content)
+	}
+}
+
+func TestCitationsParsing(t *testing.T) {
+	body := []byte(`{"content":[{"type":"text","text":"hello","citations":[{"type":"web_search_result_location","cited_text":"hello","url":"https://example.com","title":"Example","encrypted_index":"enc","document_index":1,"document_title":"Doc","start_page_number":2,"end_page_number":3,"start_char_index":4,"end_char_index":9}]}]}`)
+	result, err := parseGenerateResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := result.Content[0].(TextContent)
+	if text.Citations[0].CitedText != "hello" || text.Citations[0].URL != "https://example.com" || text.Citations[0].DocumentIndex != 1 || text.Citations[0].StartCharIndex != 4 {
+		t.Fatalf("text = %#v", text)
+	}
+}
+
+func TestCitationsStreaming(t *testing.T) {
+	sse := "event: message_start\ndata: {\"message\":{\"id\":\"msg\",\"model\":\"claude-3-haiku-20240307\",\"usage\":{\"input_tokens\":1}}}\n\n" +
+		"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"citations_delta\",\"citation\":{\"type\":\"char_location\",\"cited_text\":\"x\",\"start_char_index\":1,\"end_char_index\":2}}}\n\n" +
+		"event: content_block_stop\ndata: {\"index\":0}\n\n" +
+		"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+		"event: message_stop\ndata: {}\n\n"
+	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return textResponse(200, sse), nil }}
+	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
+	result, err := model.DoStream(context.Background(), StreamOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []StreamPart
+	for part := range result.Stream {
+		parts = append(parts, part)
+	}
+	text := parts[3].(StreamTextDelta)
+	if text.Text != "hello" {
+		t.Fatalf("text = %#v", text)
+	}
+	delta := parts[4].(StreamTextDelta)
+	if delta.Citations[0].CitedText != "x" || delta.Citations[0].StartCharIndex != 1 {
+		t.Fatalf("delta = %#v", delta)
+	}
+	finishCount := 0
+	for _, part := range parts {
+		if _, ok := part.(StreamFinish); ok {
+			finishCount++
+		}
+	}
+	if finishCount != 1 {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if finish := parts[len(parts)-1].(StreamFinish); finish.FinishReason != FinishReasonStop || finish.Usage.InputTokens.Total != 1 || finish.Usage.OutputTokens.Total != 1 {
+		t.Fatalf("finish = %#v", finish)
+	}
+}
+
+func TestProviderToolResultErrorParsing(t *testing.T) {
+	body := []byte(`{"content":[{"type":"tool_result","tool_use_id":"call","content":[{"type":"web_fetch_error","error_code":"not_found"},{"type":"web_fetch_result","url":"https://example.com","retrieved_at":"now","media_type":"text/html","data":"doc"},{"type":"web_search_error","error_code":"blocked"},{"type":"web_search_result","url":"https://search","title":"Search","encrypted_content":"enc","page_age":"1d"},{"type":"code_execution_error","error_code":"timeout"},{"type":"code_execution_result","stdout":"out","stderr":"err","return_code":1,"content":[{"type":"text","text":"x"}]},{"type":"encrypted_code_execution_result","encrypted_stdout":"encout","stderr":"err","return_code":2,"content":[{"type":"text","text":"y"}]},{"type":"bash_code_execution_error","error_code":"bad"},{"type":"bash_code_execution_result","stdout":"bout","stderr":"berr","return_code":3,"content":[{"type":"text","text":"z"}]},{"type":"tool_search_error","error_code":"none"},{"type":"tool_search_result","tool_references":[{"name":"tool","description":"desc"}]},{"type":"advisor_error","error_code":"nope"},{"type":"advisor_result","text":"advice"},{"type":"advisor_redacted_result","encrypted_content":"secret"}]}]}`)
+	result, err := parseGenerateResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := result.Content[0].(ToolResultContent).Result
+	checks := []bool{
+		parts[0].(WebFetchError).ErrorCode == "not_found",
+		parts[1].(WebFetchResult).URL == "https://example.com",
+		parts[2].(WebSearchError).ErrorCode == "blocked",
+		parts[3].(WebSearchResult).EncryptedContent == "enc",
+		parts[4].(CodeExecutionError).ErrorCode == "timeout",
+		parts[5].(CodeExecutionResult).ReturnCode == 1,
+		parts[6].(EncryptedCodeExecutionResult).EncryptedStdout == "encout",
+		parts[7].(BashCodeExecutionError).ErrorCode == "bad",
+		parts[8].(BashCodeExecutionResult).Stdout == "bout",
+		parts[9].(ToolSearchError).ErrorCode == "none",
+		parts[10].(ToolSearchResult).ToolReferences[0].Name == "tool",
+		parts[11].(AdvisorError).ErrorCode == "nope",
+		parts[12].(AdvisorResult).Text == "advice",
+		parts[13].(AdvisorRedactedResult).EncryptedContent == "secret",
+	}
+	for i, ok := range checks {
+		if !ok {
+			t.Fatalf("check %d failed: %#v", i, parts[i])
+		}
+	}
+}
+
+func TestToolResultErrorStreaming(t *testing.T) {
+	sse := "event: message_start\ndata: {\"message\":{\"id\":\"msg\",\"model\":\"claude-3-haiku-20240307\"}}\n\n" +
+		"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_result\",\"tool_use_id\":\"call\",\"content\":[{\"type\":\"advisor_error\",\"error_code\":\"bad\"}]}}\n\n" +
+		"event: content_block_stop\ndata: {\"index\":0}\n\n" +
+		"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n" +
+		"event: message_stop\ndata: {}\n\n"
+	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return textResponse(200, sse), nil }}
+	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
+	result, err := model.DoStream(context.Background(), StreamOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []StreamPart
+	for part := range result.Stream {
+		parts = append(parts, part)
+	}
+	toolResult := parts[2].(StreamToolResult)
+	if toolResult.Result[0].(AdvisorError).ErrorCode != "bad" {
+		t.Fatalf("part = %#v", toolResult)
+	}
+	finishCount := 0
+	for _, part := range parts {
+		if _, ok := part.(StreamFinish); ok {
+			finishCount++
+		}
+	}
+	if finishCount != 1 {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if _, ok := parts[len(parts)-1].(StreamFinish); !ok {
+		t.Fatalf("parts = %#v", parts)
+	}
+}
+
+func TestNoOpLogger(t *testing.T) {
+	logger := noopLogger{}
+	logger.Debug("debug", "k", "v")
+	logger.Info("info")
+	logger.Warn("warn")
+	logger.Error("error")
+}
+
+func TestStructuredLogger(t *testing.T) {
+	logger := &captureLogger{}
+	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`), nil
+	}}
+	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher, Logger: logger}).Model("claude-3-haiku-20240307")
+	_, err := model.DoGenerate(context.Background(), GenerateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logger.calls) < 2 || logger.calls[0] != "debug:anthropic generate request" {
+		t.Fatalf("calls = %#v", logger.calls)
+	}
+}
+
+func TestDoGenerateNetworkError(t *testing.T) {
+	want := errors.New("network")
+	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return nil, want }}
+	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
+	_, err := model.DoGenerate(context.Background(), GenerateOptions{})
+	if !errors.Is(err, want) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestDoGenerateWithAllContentTypes(t *testing.T) {
+	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"content":[{"type":"text","text":"ok","citations":[{"cited_text":"ok"}]},{"type":"thinking","thinking":"think"},{"type":"compaction","text":"compact"},{"type":"source","url":"https://example.com"},{"type":"tool_use","id":"call","name":"tool","input":{"x":1}},{"type":"tool_result","tool_use_id":"call","content":[{"type":"advisor_result","text":"advice"}]}]}`), nil
+	}}
+	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
+	result, err := model.DoGenerate(context.Background(), GenerateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Content) != 6 || result.Content[0].(TextContent).Citations[0].CitedText != "ok" || result.Content[5].(ToolResultContent).Result[0].(AdvisorResult).Text != "advice" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestMaxTokensDefaultsThinkingAndCaps(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307").(*anthropicLanguageModel)
+	tests := []struct {
+		name     string
+		max      int
+		thinking *ThinkingConfig
+		want     int
+	}{
+		{"zero", 0, nil, 4096},
+		{"positive", 100, nil, 100},
+		{"enabled_positive", 100, &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: 1024}, 1124},
+		{"adaptive", 0, &ThinkingConfig{Type: ThinkingTypeAdaptive}, 4096},
+		{"disabled", 0, &ThinkingConfig{Type: ThinkingTypeDisabled}, 4096},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := model.buildRequest(GenerateOptions{MaxTokens: tc.max, Thinking: tc.thinking}, false)
+			if req.MaxTokens != tc.want || req.MaxTokens == 0 {
+				t.Fatalf("max_tokens = %d, want %d", req.MaxTokens, tc.want)
+			}
+		})
+	}
+	unknown := CreateAnthropic(ProviderSettings{}).Model("custom-model").(*anthropicLanguageModel)
+	req, warnings := unknown.buildRequest(GenerateOptions{}, false)
+	if req.MaxTokens != 4096 || len(warnings) != 1 || warnings[0].Type != "compatibility" {
+		t.Fatalf("unknown default = %d, warnings %#v", req.MaxTokens, warnings)
+	}
+	unknownClaude := CreateAnthropic(ProviderSettings{}).Model("claude-future-model").(*anthropicLanguageModel)
+	req, warnings = unknownClaude.buildRequest(GenerateOptions{}, false)
+	if req.MaxTokens != 128000 || len(warnings) != 1 || warnings[0].Type != "compatibility" {
+		t.Fatalf("unknown Claude default = %d, warnings %#v", req.MaxTokens, warnings)
+	}
+}
+
+func TestThinkingKnownModelCapValidation(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307").(*anthropicLanguageModel)
+	tests := []struct {
+		name   string
+		max    int
+		budget int
+	}{
+		{"budget_equals_cap", 1, 4096},
+		{"budget_exceeds_cap", 1, 4097},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, warnings, _, _, err := model.buildRequestWithOptions(GenerateOptions{
+				MaxTokens: tc.max,
+				Thinking:  &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: tc.budget},
+			}, false)
+			var limitErr *ThinkingTokenLimitError
+			if !errors.As(err, &limitErr) {
+				t.Fatalf("error = %T %v, want *ThinkingTokenLimitError", err, err)
+			}
+			if limitErr.BudgetTokens != tc.budget || limitErr.MaxOutputTokens != 4096 {
+				t.Fatalf("error = %#v", limitErr)
+			}
+			if len(warnings) != 0 {
+				t.Fatalf("warnings = %#v", warnings)
+			}
+		})
+	}
+
+	req, warnings, _, _, err := model.buildRequestWithOptions(GenerateOptions{
+		Thinking: &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: 1024},
+	}, false)
+	if err != nil || req.MaxTokens != 4096 || len(warnings) != 0 {
+		t.Fatalf("default overflow request = %#v, warnings = %#v, err = %v", req, warnings, err)
+	}
+
+	req, warnings, _, _, err = model.buildRequestWithOptions(GenerateOptions{
+		MaxTokens: 3073,
+		Thinking:  &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: 1024},
+	}, false)
+	if err != nil || req.MaxTokens != 4096 || len(warnings) != 1 || warnings[0].Type != "unsupported-setting" {
+		t.Fatalf("explicit overflow request = %#v, warnings = %#v, err = %v", req, warnings, err)
+	}
+
+	req, warnings, _, _, err = model.buildRequestWithOptions(GenerateOptions{
+		MaxTokens: 1,
+		Thinking:  &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: 4095},
+	}, false)
+	if err != nil || req.MaxTokens != 4096 || len(warnings) != 0 {
+		t.Fatalf("near-cap request = %#v, warnings = %#v, err = %v", req, warnings, err)
+	}
+}
+
+func TestThinkingBudgetMinimum(t *testing.T) {
+	var attempts atomic.Int32
+	model := CreateAnthropic(ProviderSettings{Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		return nil, errors.New("unexpected transport")
+	}}}).Model("custom-model").(*anthropicLanguageModel)
+
+	for _, budget := range []int{-1, 1, minimumThinkingBudgetTokens - 1} {
+		t.Run(fmt.Sprintf("invalid_%d", budget), func(t *testing.T) {
+			_, _, _, _, err := model.buildRequestWithOptions(GenerateOptions{
+				MaxTokens: 1,
+				Thinking:  &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: budget},
+			}, false)
+			var constructionErr *RequestConstructionError
+			if !errors.As(err, &constructionErr) {
+				t.Fatalf("error = %T %v, want *RequestConstructionError", err, err)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name, wantWarning string
+		budget            int
+	}{
+		{name: "zero_defaults", budget: 0, wantWarning: "compatibility"},
+		{name: "minimum_valid", budget: minimumThinkingBudgetTokens},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, warnings, _, _, err := model.buildRequestWithOptions(GenerateOptions{
+				MaxTokens: 1,
+				Thinking:  &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: tc.budget},
+			}, false)
+			if err != nil || req.Thinking == nil || req.Thinking.BudgetTokens != minimumThinkingBudgetTokens || req.MaxTokens != minimumThinkingBudgetTokens+1 {
+				t.Fatalf("request = %#v, warnings = %#v, err = %v", req, warnings, err)
+			}
+			if tc.wantWarning == "" && len(warnings) != 0 || tc.wantWarning != "" && (len(warnings) != 1 || warnings[0].Type != tc.wantWarning) {
+				t.Fatalf("warnings = %#v", warnings)
+			}
+		})
+	}
+
+	_, err := model.DoGenerate(context.Background(), GenerateOptions{
+		MaxTokens: 1,
+		Thinking:  &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: minimumThinkingBudgetTokens - 1},
+	})
+	var constructionErr *RequestConstructionError
+	if !errors.As(err, &constructionErr) || attempts.Load() != 0 {
+		t.Fatalf("error = %T %v, transport attempts = %d", err, err, attempts.Load())
+	}
+}
+
+func TestThinkingCapFailurePreservesWarningsAndSkipsTransport(t *testing.T) {
+	var attempts atomic.Int32
+	temperature := 0.5
+	model := CreateAnthropic(ProviderSettings{Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		return nil, errors.New("unexpected transport")
+	}}}).Model("claude-3-haiku-20240307").(*anthropicLanguageModel)
+
+	_, warnings, _, _, err := model.buildRequestWithOptions(GenerateOptions{
+		MaxTokens:   1,
+		Temperature: &temperature,
+		Thinking:    &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: 4096},
+	}, false)
+	var limitErr *ThinkingTokenLimitError
+	if !errors.As(err, &limitErr) || len(warnings) != 1 || warnings[0].Type != "unsupported-setting" {
+		t.Fatalf("error = %T %v, warnings = %#v", err, err, warnings)
+	}
+
+	_, err = model.DoGenerate(context.Background(), GenerateOptions{
+		MaxTokens: 1,
+		Thinking:  &ThinkingConfig{Type: ThinkingTypeEnabled, BudgetTokens: 4096},
+	})
+	if !errors.As(err, &limitErr) || attempts.Load() != 0 {
+		t.Fatalf("error = %T %v, transport attempts = %d", err, err, attempts.Load())
+	}
+}
+
+func TestResponseBodyLimitConfiguration(t *testing.T) {
+	responseBody := `{"id":"id","content":[],"usage":{}}`
+	for _, tc := range []struct {
+		name       string
+		limit      int64
+		wantErr    bool
+		wantLength int
+	}{
+		{"configured_limit", 8, true, 8},
+		{"zero_uses_default_limit", 0, false, 0},
+		{"negative_uses_default_limit", -1, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := CreateAnthropic(ProviderSettings{
+				Fetch:                roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return jsonResponse(http.StatusOK, responseBody), nil }},
+				MaxResponseBodyBytes: tc.limit,
+			}).Model("claude-3-haiku-20240307")
+
+			_, err := model.DoGenerate(context.Background(), GenerateOptions{})
+			var apiErr *APICallError
+			if errors.As(err, &apiErr) != tc.wantErr {
+				t.Fatalf("error = %#v, want limited = %v", err, tc.wantErr)
+			}
+			if tc.wantErr && (!apiErr.Truncated || len(apiErr.Body) != tc.wantLength) {
+				t.Fatalf("error = %#v", apiErr)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestErrorBodyLimitConfiguration(t *testing.T) {
+	errorBody := strings.Repeat("x", 64)
+	for _, tc := range []struct {
+		name       string
+		limit      int64
+		wantLength int
+	}{
+		{"configured_limit", 8, 8},
+		{"zero_uses_default_limit", 0, len(errorBody)},
+		{"negative_uses_default_limit", -1, len(errorBody)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := CreateAnthropic(ProviderSettings{
+				Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+					return jsonResponse(http.StatusInternalServerError, errorBody), nil
+				}},
+				MaxErrorResponseBytes: tc.limit,
+				Retry:                 &RetryOptions{MaxRetries: 0},
+			}).Model("claude-3-haiku-20240307")
+
+			_, err := model.DoGenerate(context.Background(), GenerateOptions{})
+			var apiErr *APICallError
+			if !errors.As(err, &apiErr) || len(apiErr.Body) != tc.wantLength || apiErr.Truncated != (tc.limit > 0) {
+				t.Fatalf("error = %#v", err)
+			}
+		})
+	}
+}
+
+func TestSuccessfulResponseReadErrors(t *testing.T) {
+	readErr := errors.New("response read failed")
+	for _, tt := range []struct {
+		name          string
+		body          []byte
+		limit         int64
+		tools         []Tool
+		wantBody      string
+		wantTruncated bool
+		wantRetryable bool
+	}{
+		{name: "immediate failure is typed and replay safe", limit: 32, wantRetryable: true},
+		{name: "partial response is captured without parsing", body: []byte(`{"type":"message"`), limit: 32, wantBody: `{"type":"message"`, wantRetryable: true},
+		{name: "failure at capture limit is incomplete", body: []byte("abcd"), limit: 4, wantBody: "abcd", wantTruncated: true, wantRetryable: true},
+		{name: "provider tool response ambiguity is not retryable", limit: 32, tools: []Tool{{ID: "anthropic.web_search_20250305"}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := http.Header{"X-Request-Id": []string{"response-read-id"}, "X-Diagnostic": []string{"before"}}
+			calls := 0
+			model := CreateAnthropic(ProviderSettings{
+				MaxResponseBodyBytes: tt.limit,
+				Retry:                &RetryOptions{MaxRetries: 2},
+				Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+					calls++
+					return &http.Response{StatusCode: http.StatusOK, Header: headers, Body: &testReadCloser{data: tt.body, err: readErr}}, nil
+				}},
+			}).Model("claude-3-haiku")
+
+			result, err := model.DoGenerate(context.Background(), GenerateOptions{Tools: tt.tools})
+			if result != nil {
+				t.Fatalf("result = %#v, want nil", result)
+			}
+			var apiErr *APICallError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("error = %T %v, want *APICallError", err, err)
+			}
+			if apiErr.Status != http.StatusOK || apiErr.Message != "failed to read successful response body" || apiErr.Type != "" || apiErr.RequestID != "response-read-id" || string(apiErr.Body) != tt.wantBody || apiErr.Truncated != tt.wantTruncated || apiErr.Retryable != tt.wantRetryable || !errors.Is(apiErr, readErr) {
+				t.Fatalf("APICallError = %#v", apiErr)
+			}
+			headers["X-Diagnostic"][0] = "after"
+			headers["X-Diagnostic"] = append(headers["X-Diagnostic"], "later")
+			if got := apiErr.Headers.Get("X-Diagnostic"); got != "before" {
+				t.Fatalf("cloned header = %q, want before", got)
+			}
+			if got := apiErr.Headers.Values("X-Diagnostic"); len(got) != 1 {
+				t.Fatalf("cloned diagnostic values = %#v, want one value", got)
+			}
+			if calls != 1 {
+				t.Fatalf("transport calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+func TestNonSuccessReadErrorKeepsDiagnostics(t *testing.T) {
+	readErr := io.ErrUnexpectedEOF
+	model := CreateAnthropic(ProviderSettings{
+		MaxErrorResponseBytes: 32,
+		Retry:                 &RetryOptions{MaxRetries: 0},
+		Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{"Request-Id": []string{"error-id"}}, Body: &testReadCloser{data: []byte("upstream"), err: readErr}}, nil
+		}},
+	}).Model("claude-3-haiku")
+
+	_, err := model.DoGenerate(context.Background(), GenerateOptions{})
+	var apiErr *APICallError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadGateway || apiErr.RequestID != "error-id" || string(apiErr.Body) != "upstream" || !errors.Is(apiErr, readErr) {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
+func TestStreamNonSuccessReadErrorKeepsDiagnostics(t *testing.T) {
+	readErr := io.ErrUnexpectedEOF
+	headers := http.Header{"X-Amzn-RequestId": []string{"stream-error-id"}, "X-Diagnostic": []string{"before"}}
+	model := CreateAnthropic(ProviderSettings{
+		MaxErrorResponseBytes: 32,
+		Retry:                 &RetryOptions{MaxRetries: 0},
+		Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusBadGateway, Header: headers, Body: &testReadCloser{data: []byte("upstream"), err: readErr}}, nil
+		}},
+	}).Model("claude-3-haiku")
+
+	result, err := model.DoStream(context.Background(), StreamOptions{})
+	if result != nil {
+		t.Fatalf("result = %#v, want nil", result)
+	}
+	var apiErr *APICallError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadGateway || apiErr.Message != "upstream" || apiErr.Type != "" || apiErr.RequestID != "stream-error-id" || string(apiErr.Body) != "upstream" || !errors.Is(apiErr, readErr) {
+		t.Fatalf("error = %#v", err)
+	}
+	headers["X-Diagnostic"][0] = "after"
+	if got := apiErr.Headers.Get("X-Diagnostic"); got != "before" {
+		t.Fatalf("cloned header = %q, want before", got)
+	}
+}
+
+func TestNilResponseBodyIsTypedForGenerateAndStream(t *testing.T) {
+	for _, tt := range []struct {
+		status        int
+		wantRetryable bool
+	}{
+		{status: http.StatusContinue},
+		{status: http.StatusOK, wantRetryable: true},
+		{status: http.StatusFound},
+		{status: http.StatusBadRequest},
+		{status: http.StatusTooManyRequests, wantRetryable: true},
+		{status: http.StatusInternalServerError, wantRetryable: true},
+	} {
+		for _, stream := range []bool{false, true} {
+			name := http.StatusText(tt.status)
+			if stream {
+				name += " stream"
+			} else {
+				name += " generate"
+			}
+			t.Run(name, func(t *testing.T) {
+				headers := http.Header{"X-Request-Id": []string{"nil-body-id"}, "X-Diagnostic": []string{"before"}}
+				model := CreateAnthropic(ProviderSettings{
+					Retry: &RetryOptions{MaxRetries: 0},
+					Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+						return &http.Response{StatusCode: tt.status, Header: headers}, nil
+					}},
+				}).Model("claude-3-haiku")
+
+				var err error
+				if stream {
+					_, err = model.DoStream(context.Background(), StreamOptions{})
+				} else {
+					_, err = model.DoGenerate(context.Background(), GenerateOptions{})
+				}
+				var apiErr *APICallError
+				if !errors.As(err, &apiErr) {
+					t.Fatalf("error = %T %v, want *APICallError", err, err)
+				}
+				if apiErr.Status != tt.status || apiErr.RequestID != "nil-body-id" || apiErr.Message != "HTTP response has nil body" || apiErr.Retryable != tt.wantRetryable {
+					t.Fatalf("APICallError = %#v", apiErr)
+				}
+				headers.Set("X-Diagnostic", "after")
+				if got := apiErr.Headers.Get("X-Diagnostic"); got != "before" {
+					t.Fatalf("cloned header = %q, want before", got)
+				}
+			})
+		}
+	}
+}
+
+func TestNilResponseBodyIsNeverRetryableWhenReplayUnsafe(t *testing.T) {
+	for _, status := range []int{http.StatusContinue, http.StatusOK, http.StatusFound, http.StatusBadRequest, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		for _, stream := range []bool{false, true} {
+			name := http.StatusText(status)
+			if stream {
+				name += " stream"
+			} else {
+				name += " generate"
+			}
+			t.Run(name, func(t *testing.T) {
+				model := CreateAnthropic(ProviderSettings{
+					Retry: &RetryOptions{MaxRetries: 0},
+					Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+						return &http.Response{StatusCode: status}, nil
+					}},
+				}).Model("claude-3-haiku")
+
+				tools := []Tool{{ID: "anthropic.web_search_20250305"}}
+				var err error
+				if stream {
+					_, err = model.DoStream(context.Background(), StreamOptions{Tools: tools})
+				} else {
+					_, err = model.DoGenerate(context.Background(), GenerateOptions{Tools: tools})
+				}
+				var apiErr *APICallError
+				if !errors.As(err, &apiErr) || apiErr.Retryable {
+					t.Fatalf("error = %#v, want non-retryable APICallError", err)
+				}
+			})
+		}
+	}
+}
+
+func TestHTTPErrorRetryabilityRequiresReplaySafety(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError} {
+		for _, stream := range []bool{false, true} {
+			for _, tt := range []struct {
+				name          string
+				tools         []Tool
+				wantRetryable bool
+				wantCalls     int
+			}{
+				{name: "ordinary request", wantRetryable: true, wantCalls: 3},
+				{name: "provider tool request", tools: []Tool{{ID: "anthropic.web_search_20250305"}}, wantRetryable: false, wantCalls: 1},
+			} {
+				name := http.StatusText(status) + " " + tt.name
+				if stream {
+					name += " stream"
+				} else {
+					name += " generate"
+				}
+				t.Run(name, func(t *testing.T) {
+					calls := 0
+					model := CreateAnthropic(ProviderSettings{
+						Retry: &RetryOptions{MaxRetries: 2, BaseDelay: time.Nanosecond, MaxDelay: time.Nanosecond},
+						Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+							calls++
+							return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"failed"}}`))}, nil
+						}},
+					}).Model("claude-3-haiku")
+
+					var err error
+					if stream {
+						_, err = model.DoStream(context.Background(), StreamOptions{Tools: tt.tools})
+					} else {
+						_, err = model.DoGenerate(context.Background(), GenerateOptions{Tools: tt.tools})
+					}
+					var apiErr *APICallError
+					if !errors.As(err, &apiErr) || apiErr.Retryable != tt.wantRetryable {
+						t.Fatalf("error = %#v, want retryable %v", err, tt.wantRetryable)
+					}
+					if calls != tt.wantCalls {
+						t.Fatalf("transport calls = %d, want %d", calls, tt.wantCalls)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestNilResponseRetryabilityMatchesReplaySafety(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, tt := range []struct {
+			name          string
+			modelOptions  ModelOptions
+			tools         []Tool
+			wantRetryable bool
+		}{
+			{name: "ordinary request", wantRetryable: true},
+			{name: "provider tool request", tools: []Tool{{ID: "anthropic.web_search_20250305"}}},
+			{name: "MCP request", modelOptions: ModelOptions{MCPServers: []MCPServer{{Name: "server"}}}},
+		} {
+			name := tt.name
+			if stream {
+				name += " stream"
+			} else {
+				name += " generate"
+			}
+			t.Run(name, func(t *testing.T) {
+				calls := 0
+				model := CreateAnthropic(ProviderSettings{
+					Retry: &RetryOptions{MaxRetries: 2, BaseDelay: time.Nanosecond, MaxDelay: time.Nanosecond},
+					Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+						calls++
+						return nil, nil
+					}},
+				}).Model("claude-3-haiku", tt.modelOptions)
+
+				var err error
+				if stream {
+					_, err = model.DoStream(context.Background(), StreamOptions{Tools: tt.tools})
+				} else {
+					_, err = model.DoGenerate(context.Background(), GenerateOptions{Tools: tt.tools})
+				}
+				var apiErr *APICallError
+				if !errors.As(err, &apiErr) || apiErr.Message != "fetcher returned nil response and nil error" || apiErr.Retryable != tt.wantRetryable {
+					t.Fatalf("error = %#v, want retryable %v", err, tt.wantRetryable)
+				}
+				if calls != 1 {
+					t.Fatalf("transport calls = %d, want 1", calls)
+				}
+			})
+		}
+	}
+}
+
+func TestResponseReplayBuildsExactMultiTurnRequest(t *testing.T) {
+	response := []byte(`{"id":"msg_1","model":"claude-3-haiku-20240307","role":"assistant","stop_reason":"tool_use","usage":{},"content":[{"type":"text","text":"I will look that up.","citations":[{"type":"web_search_result_location","url":"https://example.com","title":"Example","encrypted_index":"index","cited_text":"quoted"}],"future_text":{"kept":true}},{"type":"tool_use","id":"client","name":"local_weather","input":null,"provider_metadata":{"discard":true}},{"type":"server_tool_use","id":"search","name":"web_search","input":{"query":"Anthropic"},"dynamic":true,"caller":{"type":"code_execution_20250825","tool_id":"code","future":"caller"},"future_server":1,"provider_metadata":{"discard":true}},{"type":"web_search_tool_result","tool_use_id":"search","caller":{"type":"direct"},"content":[{"type":"web_search_result","url":"https://example.com","title":"Example","encrypted_content":"cipher","page_age":"today","future_result":true}]},{"type":"mcp_tool_use","id":"mcp","name":"lookup","server_name":"catalog","input":{"term":"sdk"},"dynamic":true,"future_mcp":"kept"},{"type":"mcp_tool_result","tool_use_id":"mcp","content":[{"type":"text","text":"found"}],"dynamic":true,"future_mcp_result":2}]}`)
+	result, err := parseGenerateResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contents := make([]AssistantContent, 0, len(result.Content))
+	for _, content := range result.Content {
+		assistantContent, ok := content.(AssistantContent)
+		if !ok {
+			t.Fatalf("response content %T is not assistant content", content)
+		}
+		contents = append(contents, assistantContent)
+	}
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307", ModelOptions{
+		MCPServers: []MCPServer{{Name: "catalog", URL: "https://mcp.example", ToolConfiguration: &ToolConfiguration{AllowedTools: []string{"lookup"}}}},
+	}).(*anthropicLanguageModel)
+	request, _, _, _, err := model.buildRequestWithOptions(GenerateOptions{
+		MaxTokens: 64,
+		Messages:  []Message{UserMessage{Content: []UserContent{TextContent{Text: "Research this"}}}, AssistantMessage{Content: contents}},
+		Tools:     []Tool{{ID: "anthropic.web_search_20250305", MaxUses: intPtr(2)}},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"model":"claude-3-haiku-20240307","messages":[{"role":"user","content":[{"text":"Research this","type":"text"}]},{"role":"assistant","content":[{"citations":[{"type":"web_search_result_location","cited_text":"quoted","url":"https://example.com","title":"Example","encrypted_index":"index"}],"future_text":{"kept":true},"text":"I will look that up.","type":"text"},{"caller":{"future":"caller","tool_id":"code","type":"code_execution_20250825"},"dynamic":true,"future_server":1,"id":"search","input":{"query":"Anthropic"},"name":"web_search","type":"server_tool_use"},{"caller":{"type":"direct"},"content":[{"encrypted_content":"cipher","future_result":true,"page_age":"today","title":"Example","type":"web_search_result","url":"https://example.com"}],"tool_use_id":"search","type":"web_search_tool_result"},{"dynamic":true,"future_mcp":"kept","id":"mcp","input":{"term":"sdk"},"name":"lookup","server_name":"catalog","type":"mcp_tool_use"},{"content":[{"text":"found","type":"text"}],"dynamic":true,"future_mcp_result":2,"tool_use_id":"mcp","type":"mcp_tool_result"},{"id":"client","input":{},"name":"local_weather","type":"tool_use"}]}],"max_tokens":64,"tools":[{"name":"web_search","type":"web_search_20250305","max_uses":2},{"type":"mcp_toolset","mcp_server_name":"catalog","default_config":{"enabled":false},"configs":{"lookup":{"enabled":true}}}],"mcp_servers":[{"name":"catalog","url":"https://mcp.example"}],"output_config":{"effort":"high"}}`
+	if string(got) != want {
+		t.Fatalf("request = %s\nwant = %s", got, want)
+	}
+	if strings.Contains(string(got), "provider_metadata") {
+		t.Fatalf("outbound request contains provider_metadata: %s", got)
+	}
+}
+
+func TestResponseReplayIncludesSubsequentClientToolResult(t *testing.T) {
+	response := []byte(`{"id":"msg_1","model":"claude-3-haiku-20240307","role":"assistant","usage":{},"content":[{"type":"server_tool_use","id":"search","name":"web_search","input":{"query":"Anthropic"}},{"type":"web_search_tool_result","tool_use_id":"search","content":[{"type":"web_search_result","url":"https://example.com","title":"Example","encrypted_content":"cipher"}]},{"type":"tool_use","id":"client","name":"local_weather","input":null}]}`)
+	result, err := parseGenerateResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := make([]AssistantContent, 0, len(result.Content))
+	for _, content := range result.Content {
+		assistantContent, ok := content.(AssistantContent)
+		if !ok {
+			t.Fatalf("response content %T is not assistant content", content)
+		}
+		contents = append(contents, assistantContent)
+	}
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307").(*anthropicLanguageModel)
+	request, _, _, _, err := model.buildRequestWithOptions(GenerateOptions{
+		MaxTokens: 64,
+		Messages: []Message{
+			UserMessage{Content: []UserContent{TextContent{Text: "Research this"}}},
+			AssistantMessage{Content: contents},
+			UserMessage{Content: []UserContent{ToolResultContent{ToolCallID: "client", Result: []ToolResultPart{ToolResultText{Text: "72F"}}}}},
+		},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"model":"claude-3-haiku-20240307","messages":[{"role":"user","content":[{"text":"Research this","type":"text"}]},{"role":"assistant","content":[{"id":"search","input":{"query":"Anthropic"},"name":"web_search","type":"server_tool_use"},{"content":[{"encrypted_content":"cipher","title":"Example","type":"web_search_result","url":"https://example.com"}],"tool_use_id":"search","type":"web_search_tool_result"},{"id":"client","input":{},"name":"local_weather","type":"tool_use"}]},{"role":"user","content":[{"content":[{"text":"72F","type":"text"}],"tool_use_id":"client","type":"tool_result"}]}],"max_tokens":64,"output_config":{"effort":"high"}}`
+	if string(got) != want {
+		t.Fatalf("request = %s\nwant = %s", got, want)
+	}
+}
+
+func TestCapturedStreamPreservesLifecycleMetadataAndUsage(t *testing.T) {
+	sse := event("message_start", `{"message":{"id":"msg-stream","model":"claude-3-haiku-20240307","usage":{"input_tokens":10,"cache_read_input_tokens":2}}}`) +
+		event("content_block_start", `{"index":0,"content_block":{"type":"text"}}`) +
+		event("content_block_delta", `{"index":0,"delta":{"type":"text_delta","text":"Answer","citations":[{"type":"web_search_result_location","url":"https://example.com","encrypted_index":"idx"}]}}`) +
+		event("content_block_stop", `{"index":0}`) +
+		event("content_block_start", `{"index":1,"content_block":{"type":"thinking"}}`) +
+		event("content_block_delta", `{"index":1,"delta":{"type":"thinking_delta","thinking":"reason"}}`) +
+		event("content_block_delta", `{"index":1,"delta":{"type":"signature_delta","signature":"sig"}}`) +
+		event("content_block_stop", `{"index":1}`) +
+		event("content_block_start", `{"index":2,"content_block":{"type":"tool_use","id":"client","name":"weather"}}`) +
+		event("content_block_delta", `{"index":2,"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"SF\"}"}}`) +
+		event("content_block_stop", `{"index":2}`) +
+		event("content_block_start", `{"index":3,"content_block":{"type":"source","id":"source","url":"https://source.example","title":"Source","media_type":"text/html","filename":"source.html"}}`) +
+		event("content_block_stop", `{"index":3}`) +
+		event("content_block_start", `{"index":4,"content_block":{"type":"web_search_tool_result","tool_use_id":"search","content":[{"type":"web_search_result","url":"https://example.com","encrypted_content":"cipher"}]}}`) +
+		event("content_block_stop", `{"index":4}`) +
+		event("content_block_start", `{"index":5,"content_block":{"type":"code_execution_tool_result","tool_use_id":"code","content":[{"type":"code_execution_result","stdout":"ok","return_code":0}]}}`) +
+		event("content_block_stop", `{"index":5}`) +
+		event("message_delta", `{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7,"output_tokens_details":{"thinking_tokens":3}}}`) +
+		event("message_stop", `{}`)
+	model := CreateAnthropic(ProviderSettings{Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(sse))}, nil
+	}}}).Model("claude-3-haiku-20240307")
+	stream, err := model.DoStream(context.Background(), StreamOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []StreamPart
+	for part := range stream.Parts {
+		if failure, ok := part.(StreamError); ok {
+			t.Fatalf("StreamError = %v", failure.Err)
+		}
+		parts = append(parts, part)
+	}
+	var starts, ends, terminals int
+	var citation StreamTextDelta
+	var call StreamToolCall
+	var finish StreamFinish
+	var source StreamSource
+	var toolResults []StreamToolResult
+	var order []string
+	for _, part := range parts {
+		order = append(order, fmt.Sprintf("%T", part))
+		switch value := part.(type) {
+		case StreamTextStart, StreamReasoningStart, StreamToolInputStart:
+			starts++
+		case StreamTextEnd, StreamReasoningEnd, StreamToolInputEnd:
+			ends++
+		case StreamTextDelta:
+			citation = value
+		case StreamToolCall:
+			call = value
+		case StreamFinish:
+			terminals++
+			finish = value
+		case StreamSource:
+			source = value
+		case StreamToolResult:
+			toolResults = append(toolResults, value)
+		}
+	}
+	if starts != 3 || ends != 3 || terminals != 1 {
+		t.Fatalf("lifecycle starts=%d ends=%d terminals=%d parts=%#v", starts, ends, terminals, parts)
+	}
+	if stream.Response.ID != "msg-stream" || stream.Response.ModelID != "claude-3-haiku-20240307" {
+		t.Fatalf("response metadata = %#v", stream.Response)
+	}
+	if len(citation.Citations) != 1 || citation.Citations[0].URL != "https://example.com" || citation.Citations[0].EncryptedIndex != "idx" {
+		t.Fatalf("citation = %#v", citation)
+	}
+	if call.ToolCallID != "client" || call.ToolName != "weather" || string(call.Input) != `{"city":"SF"}` {
+		t.Fatalf("tool call = %#v", call)
+	}
+	if finish.Usage.InputTokens.Total != 12 || finish.Usage.InputTokens.CacheRead != 2 || finish.Usage.OutputTokens.Total != 7 || finish.Usage.OutputTokens.Reasoning != 3 || finish.Usage.OutputTokens.Text != 4 || finish.Usage.TotalTokens != 19 || !strings.Contains(string(finish.Usage.Raw), `"thinking_tokens":3`) {
+		t.Fatalf("usage = %#v", finish.Usage)
+	}
+	if source.SourceType != "source" || source.ID != "source" || source.URL != "https://source.example" || source.Title != "Source" || source.MediaType != "text/html" || source.Filename != "source.html" {
+		t.Fatalf("source = %#v", source)
+	}
+	if len(toolResults) != 2 {
+		t.Fatalf("tool results = %#v", toolResults)
+	}
+	search := toolResults[0]
+	if search.Type != "web_search_tool_result" || search.ToolCallID != "search" || !search.ProviderExecuted || len(search.Result) != 1 {
+		t.Fatalf("web search result = %#v", search)
+	}
+	webResult, ok := search.Result[0].(WebSearchResult)
+	if !ok || webResult.Type != "web_search_result" || webResult.URL != "https://example.com" || webResult.EncryptedContent != "cipher" {
+		t.Fatalf("web search payload = %#v", search.Result)
+	}
+	code := toolResults[1]
+	if code.Type != "code_execution_tool_result" || code.ToolCallID != "code" || !code.ProviderExecuted || len(code.Result) != 1 {
+		t.Fatalf("code execution result = %#v", code)
+	}
+	codeResult, ok := code.Result[0].(CodeExecutionResult)
+	if !ok || codeResult.Type != "code_execution_result" || codeResult.Stdout != "ok" || codeResult.ReturnCode != 0 {
+		t.Fatalf("code execution payload = %#v", code.Result)
+	}
+	wantOrder := []string{"anthropic.StreamStart", "anthropic.StreamResponseMetadata", "anthropic.StreamTextStart", "anthropic.StreamTextDelta", "anthropic.StreamTextEnd", "anthropic.StreamReasoningStart", "anthropic.StreamReasoningDelta", "anthropic.StreamReasoningDelta", "anthropic.StreamReasoningEnd", "anthropic.StreamToolInputStart", "anthropic.StreamToolInputDelta", "anthropic.StreamToolInputEnd", "anthropic.StreamToolCall", "anthropic.StreamSource", "anthropic.StreamToolResult", "anthropic.StreamToolResult", "anthropic.StreamFinish"}
+	if strings.Join(order, ",") != strings.Join(wantOrder, ",") {
+		t.Fatalf("part order = %#v\nwant = %#v", order, wantOrder)
+	}
+}
+
+func TestInvalidProviderToolFailsBeforeRequestAndToolInputNormalizes(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307").(*anthropicLanguageModel)
+	_, _, _, _, err := model.buildRequestWithOptions(GenerateOptions{MaxTokens: 1, Tools: []Tool{{ID: "anthropic.future_tool"}}}, false)
+	var construction *RequestConstructionError
+	if !errors.As(err, &construction) || construction.ToolIndex != 0 || construction.ToolID != "anthropic.future_tool" {
+		t.Fatalf("error = %#v", err)
+	}
+
+	_, messages := convertPrompt([]Message{AssistantMessage{Content: []AssistantContent{ToolCallContent{ToolCallID: "call", ToolName: "local", Input: nil}}}})
+	got, err := json.Marshal(messages[0].Content[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"id":"call","input":{},"name":"local","type":"tool_use"}` {
+		t.Fatalf("normalized tool call = %s", got)
+	}
+}
+
+func TestUnknownProviderToolPublicCallsFailBeforeTransport(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		name := "generate"
+		if stream {
+			name = "stream"
+		}
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			model := CreateAnthropic(ProviderSettings{Fetch: roundTripFetcher{fn: func(*http.Request) (*http.Response, error) {
+				calls++
+				return nil, errors.New("unexpected transport call")
+			}}}).Model("claude-3-haiku-20240307")
+			var err error
+			if stream {
+				_, err = model.DoStream(context.Background(), StreamOptions{Tools: []Tool{{ID: "anthropic.unknown"}}})
+			} else {
+				_, err = model.DoGenerate(context.Background(), GenerateOptions{Tools: []Tool{{ID: "anthropic.unknown"}}})
+			}
+			var construction *RequestConstructionError
+			if !errors.As(err, &construction) || construction.ToolIndex != 0 || construction.ToolID != "anthropic.unknown" {
+				t.Fatalf("error = %#v", err)
+			}
+			if calls != 0 {
+				t.Fatalf("transport calls = %d, want 0", calls)
+			}
+		})
+	}
 }

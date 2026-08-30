@@ -1,9 +1,11 @@
 package anthropic
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -189,5 +191,130 @@ func TestBetaHeadersCustom(t *testing.T) {
 	want := []string{"custom-beta"}
 	if got := headers.Values("anthropic-beta"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("anthropic-beta = %#v, want %#v", got, want)
+	}
+}
+
+func TestBaseURLNormalization(t *testing.T) {
+	tests := map[string]string{
+		"":                                defaultBaseURL,
+		"https://api.anthropic.com":       defaultBaseURL,
+		"https://api.anthropic.com/":      defaultBaseURL,
+		"https://api.anthropic.com/v1":    "https://api.anthropic.com/v1",
+		"https://api.anthropic.com/path/": "https://api.anthropic.com/path/",
+		"https://proxy.example/":          "https://proxy.example/",
+	}
+	for input, want := range tests {
+		got := CreateAnthropic(ProviderSettings{BaseURL: input}).(*anthropicProvider).baseURL
+		if got != want {
+			t.Fatalf("base URL %q = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestAdversarialModelIDs(t *testing.T) {
+	tests := []struct {
+		id            string
+		known, claude bool
+		caps          ModelCapabilities
+	}{
+		{"my-claude-sonnet-4-5", false, false, ModelCapabilities{MaxOutputTokens: 4096}},
+		{"claude-sonnet-4-unknown", false, true, ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}},
+		{"claude-sonnet-4-5-20250929", true, true, ModelCapabilities{MaxOutputTokens: 64000, StructuredOutput: true}},
+		{"claude-3-haiku-20240307", true, true, ModelCapabilities{MaxOutputTokens: 4096}},
+		{"claude-sonnet-6", false, true, ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}},
+		{"legacy/claude-sonnet-4-5", false, false, ModelCapabilities{MaxOutputTokens: 4096}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.id, func(t *testing.T) {
+			caps, known := modelCapabilities(tc.id)
+			if known != tc.known || isClaudeModel(tc.id) != tc.claude || caps != tc.caps {
+				t.Fatalf("caps = %#v, known = %v, claude = %v", caps, known, isClaudeModel(tc.id))
+			}
+		})
+	}
+}
+
+func TestEndpointJoinsPathAndPreservesQuery(t *testing.T) {
+	fetch := &captureFetcher{}
+	p := CreateAnthropic(ProviderSettings{BaseURL: "https://proxy.example/custom/v1/?tenant=a#configured", Fetch: fetch})
+	_, err := p.Model("custom").DoGenerate(context.Background(), GenerateOptions{MaxTokens: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fetch.request.URL.Path; got != "/custom/v1/messages" {
+		t.Fatalf("path = %q", got)
+	}
+	if got := fetch.request.URL.RawQuery; got != "tenant=a" {
+		t.Fatalf("query = %q", got)
+	}
+	if strings.Contains(fetch.request.URL.RequestURI(), "#") {
+		t.Fatalf("fragment transmitted in %q", fetch.request.URL.RequestURI())
+	}
+	if got := p.(*anthropicProvider).baseURL; got != "https://proxy.example/custom/v1/?tenant=a#configured" {
+		t.Fatalf("base URL = %q", got)
+	}
+}
+
+func TestInvalidBaseURLTypedError(t *testing.T) {
+	for _, baseURL := range []string{"://bad", "relative/path"} {
+		p := CreateAnthropic(ProviderSettings{BaseURL: baseURL})
+		var target *InvalidBaseURLError
+		if !errors.As(p.Err(), &target) {
+			t.Fatalf("provider error for %q = %v", baseURL, p.Err())
+		}
+	}
+}
+
+func TestInvalidBaseURLPrecedesMultipleAuthMethods(t *testing.T) {
+	p := CreateAnthropic(ProviderSettings{BaseURL: "://bad", APIKey: "key", AuthToken: "token"})
+	var target *InvalidBaseURLError
+	if !errors.As(p.Err(), &target) {
+		t.Fatalf("provider error = %v, want *InvalidBaseURLError", p.Err())
+	}
+}
+
+func TestSamplingExclusivityIsClaudeOnly(t *testing.T) {
+	temperature, topP := 0.5, 0.8
+	claude := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307").(*anthropicLanguageModel)
+	req, warnings := claude.buildRequest(GenerateOptions{MaxTokens: 10, Temperature: &temperature, TopP: &topP}, false)
+	if req.TopP != nil || len(warnings) == 0 {
+		t.Fatalf("Claude topP/warnings = %#v/%#v", req.TopP, warnings)
+	}
+	custom := CreateAnthropic(ProviderSettings{}).Model("minimax-custom").(*anthropicLanguageModel)
+	req, warnings = custom.buildRequest(GenerateOptions{MaxTokens: 10, Temperature: &temperature, TopP: &topP}, false)
+	if req.Temperature == nil || req.TopP == nil || len(warnings) != 0 {
+		t.Fatalf("custom sampling/warnings = %#v/%#v/%#v", req.Temperature, req.TopP, warnings)
+	}
+}
+
+func TestToolSearchBetaIsExplicitOnlyAndDeduped(t *testing.T) {
+	p := CreateAnthropic(ProviderSettings{}).(*anthropicProvider)
+	opts := ModelOptions{RequestTools: []Tool{{ID: "anthropic.tool_search_regex_20251119"}}}
+	if got := p.headersForOptions(opts).Values("anthropic-beta"); len(got) != 0 {
+		t.Fatalf("automatic tool search beta = %#v", got)
+	}
+	opts.AnthropicBeta = []string{"tool-search-2025-11-19", "tool-search-2025-11-19"}
+	got := p.headersForOptions(opts).Values("anthropic-beta")
+	if len(got) != 1 || got[0] != "tool-search-2025-11-19" {
+		t.Fatalf("explicit tool search beta = %#v", got)
+	}
+}
+
+func TestStopReasons(t *testing.T) {
+	tests := map[string]FinishReason{
+		"pause_turn":                    FinishReasonStop,
+		"end_turn":                      FinishReasonStop,
+		"stop_sequence":                 FinishReasonStop,
+		"refusal":                       FinishReasonContentFilter,
+		"tool_use":                      FinishReasonToolCalls,
+		"max_tokens":                    FinishReasonLength,
+		"model_context_window_exceeded": FinishReasonLength,
+		"compaction":                    FinishReason("other"),
+		"future":                        FinishReasonUnknown,
+	}
+	for raw, want := range tests {
+		if got := FinishReasonFromStopReason(raw); got != want {
+			t.Fatalf("stop reason %q = %q, want %q", raw, got, want)
+		}
 	}
 }

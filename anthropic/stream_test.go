@@ -8,23 +8,9 @@ import (
 	"time"
 )
 
-func parsePhase3(t *testing.T, sse string) []StreamPart {
-	t.Helper()
-	out := make(chan StreamPart, 32)
-	parseSSEStream(context.Background(), strings.NewReader(sse), out, nil)
-	close(out)
-	var parts []StreamPart
-	for part := range out {
-		parts = append(parts, part)
-	}
-	return parts
-}
-
-func event(name, data string) string { return "event: " + name + "\ndata: " + data + "\n\n" }
-
-func TestPhase3DuplicateMessageStartAndUsageMerge(t *testing.T) {
+func TestStreamDuplicateMessageStartAndUsageMerge(t *testing.T) {
 	start := `{"message":{"id":"m","model":"claude","usage":{"input_tokens":3,"cache_read_input_tokens":2}}}`
-	parts := parsePhase3(t, event("message_start", start)+event("message_start", start)+event("message_delta", `{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}`)+event("message_stop", `{}`))
+	parts := parseStream(t, event("message_start", start)+event("message_start", start)+event("message_delta", `{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}`)+event("message_stop", `{}`))
 	if len(parts) != 3 {
 		t.Fatalf("parts = %#v", parts)
 	}
@@ -33,13 +19,13 @@ func TestPhase3DuplicateMessageStartAndUsageMerge(t *testing.T) {
 		t.Fatalf("usage = %#v", finish.Usage)
 	}
 
-	parts = parsePhase3(t, event("message_start", start)+event("message_start", `{"message":{"id":"other","model":"claude","usage":{"input_tokens":3}}}`))
+	parts = parseStream(t, event("message_start", start)+event("message_start", `{"message":{"id":"other","model":"claude","usage":{"input_tokens":3}}}`))
 	if _, ok := parts[len(parts)-1].(StreamError); !ok {
 		t.Fatalf("parts = %#v", parts)
 	}
 }
 
-func TestPhase3InvalidTransitions(t *testing.T) {
+func TestStreamInvalidTransitions(t *testing.T) {
 	cases := []string{
 		event("content_block_start", `{"index":0,"content_block":{"type":"text"}}`),
 		event("message_start", `{"message":{"id":"m","model":"c"}}`) + event("content_block_delta", `{"index":0,"delta":{"type":"text_delta","text":"x"}}`),
@@ -47,14 +33,14 @@ func TestPhase3InvalidTransitions(t *testing.T) {
 		event("message_start", `{"message":{"id":"m","model":"c"}}`) + event("content_block_start", `{"index":0,"content_block":{"type":"text"}}`) + event("message_stop", `{}`),
 	}
 	for i, sse := range cases {
-		parts := parsePhase3(t, sse)
+		parts := parseStream(t, sse)
 		if _, ok := parts[len(parts)-1].(StreamError); !ok {
 			t.Fatalf("case %d parts = %#v", i, parts)
 		}
 	}
 }
 
-func TestPhase3MessageDeltaOnlyAllowsMessageStop(t *testing.T) {
+func TestStreamMessageDeltaOnlyAllowsMessageStop(t *testing.T) {
 	prefix := event("message_start", `{"message":{"id":"m","model":"c"}}`) +
 		event("message_delta", `{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`)
 	cases := []struct {
@@ -67,25 +53,25 @@ func TestPhase3MessageDeltaOnlyAllowsMessageStop(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			parts := parsePhase3(t, prefix+tc.trailing)
+			parts := parseStream(t, prefix+tc.trailing)
 			if _, ok := parts[len(parts)-1].(StreamError); !ok {
 				t.Fatalf("parts = %#v", parts)
 			}
 		})
 	}
 
-	parts := parsePhase3(t, prefix+event("ping", `{}`)+event("message_stop", `{}`))
+	parts := parseStream(t, prefix+event("ping", `{}`)+event("message_stop", `{}`))
 	if _, ok := parts[len(parts)-1].(StreamFinish); !ok {
 		t.Fatalf("parts = %#v", parts)
 	}
 }
 
-func TestPhase3BlockSpecificEventsAndCitation(t *testing.T) {
+func TestStreamBlockSpecificEventsAndCitation(t *testing.T) {
 	sse := event("message_start", `{"message":{"id":"m","model":"c"}}`) +
 		event("content_block_start", `{"index":2,"content_block":{"type":"text"}}`) +
 		event("content_block_delta", `{"index":2,"delta":{"type":"citations_delta","citation":{"type":"web_search_result_location","url":"https://example.com"}}}`) +
 		event("content_block_stop", `{"index":2}`) + event("message_stop", `{}`)
-	parts := parsePhase3(t, sse)
+	parts := parseStream(t, sse)
 	delta := parts[3].(StreamTextDelta)
 	if len(delta.Citations) != 1 || delta.Citations[0].URL != "https://example.com" {
 		t.Fatalf("parts = %#v", parts)
@@ -95,40 +81,40 @@ func TestPhase3BlockSpecificEventsAndCitation(t *testing.T) {
 	}
 }
 
-func TestPhase3ToolInputAccumulationAndValidation(t *testing.T) {
+func TestStreamToolInputAccumulationAndValidation(t *testing.T) {
 	prefix := event("message_start", `{"message":{"id":"m","model":"c"}}`)
 	sse := prefix + event("content_block_start", `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"weather"}}`) +
 		event("content_block_delta", `{"index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}`) +
 		event("content_block_delta", `{"index":0,"delta":{"type":"input_json_delta","partial_json":"\"SF\"}"}}`) + event("content_block_stop", `{"index":0}`) + event("message_stop", `{}`)
-	parts := parsePhase3(t, sse)
+	parts := parseStream(t, sse)
 	call := parts[6].(StreamToolCall)
 	if string(call.Input) != `{"city":"SF"}` || call.ToolCallID != "call" {
 		t.Fatalf("call = %#v", call)
 	}
 
-	parts = parsePhase3(t, prefix+event("content_block_start", `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"weather","input":{}}}`)+event("content_block_delta", `{"index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"SF\"}"}}`)+event("content_block_stop", `{"index":0}`)+event("message_stop", `{}`))
+	parts = parseStream(t, prefix+event("content_block_start", `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"weather","input":{}}}`)+event("content_block_delta", `{"index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"SF\"}"}}`)+event("content_block_stop", `{"index":0}`)+event("message_stop", `{}`))
 	if got := string(parts[5].(StreamToolCall).Input); got != `{"city":"SF"}` {
 		t.Fatalf("delta input = %s", got)
 	}
 
-	parts = parsePhase3(t, prefix+event("content_block_start", `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"weather"}}`)+event("content_block_stop", `{"index":0}`)+event("message_stop", `{}`))
+	parts = parseStream(t, prefix+event("content_block_start", `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"weather"}}`)+event("content_block_stop", `{"index":0}`)+event("message_stop", `{}`))
 	if string(parts[4].(StreamToolCall).Input) != `{}` {
 		t.Fatalf("parts = %#v", parts)
 	}
 
-	parts = parsePhase3(t, prefix+event("content_block_start", `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"weather"}}`)+event("content_block_delta", `{"index":0,"delta":{"type":"input_json_delta","partial_json":"[]"}}`)+event("content_block_stop", `{"index":0}`))
+	parts = parseStream(t, prefix+event("content_block_start", `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"weather"}}`)+event("content_block_delta", `{"index":0,"delta":{"type":"input_json_delta","partial_json":"[]"}}`)+event("content_block_stop", `{"index":0}`))
 	if _, ok := parts[len(parts)-1].(StreamError); !ok {
 		t.Fatalf("parts = %#v", parts)
 	}
 }
 
-func TestPhase3EagerBlocksRequireOneStopWithoutLifecyclePart(t *testing.T) {
+func TestStreamEagerBlocksRequireOneStopWithoutLifecyclePart(t *testing.T) {
 	prefix := event("message_start", `{"message":{"id":"m","model":"c"}}`)
 	for _, block := range []string{
 		`{"type":"source","id":"src","url":"https://example.com"}`,
 		`{"type":"tool_result","tool_use_id":"call","content":[{"type":"text","text":"ok"}]}`,
 	} {
-		parts := parsePhase3(t, prefix+event("content_block_start", `{"index":0,"content_block":`+block+`}`)+event("content_block_stop", `{"index":0}`)+event("message_stop", `{}`))
+		parts := parseStream(t, prefix+event("content_block_start", `{"index":0,"content_block":`+block+`}`)+event("content_block_stop", `{"index":0}`)+event("message_stop", `{}`))
 		if len(parts) != 4 {
 			t.Fatalf("parts = %#v", parts)
 		}
@@ -136,14 +122,14 @@ func TestPhase3EagerBlocksRequireOneStopWithoutLifecyclePart(t *testing.T) {
 			t.Fatalf("terminal part = %#v", parts[3])
 		}
 
-		parts = parsePhase3(t, prefix+event("content_block_start", `{"index":0,"content_block":`+block+`}`)+event("content_block_stop", `{"index":0}`)+event("content_block_stop", `{"index":0}`))
+		parts = parseStream(t, prefix+event("content_block_start", `{"index":0,"content_block":`+block+`}`)+event("content_block_stop", `{"index":0}`)+event("content_block_stop", `{"index":0}`))
 		if _, ok := parts[len(parts)-1].(StreamError); !ok {
 			t.Fatalf("duplicate stop parts = %#v", parts)
 		}
 	}
 }
 
-func TestPhase3MessageStopFinishesWithoutEOF(t *testing.T) {
+func TestStreamMessageStopFinishesWithoutEOF(t *testing.T) {
 	reader, writer := io.Pipe()
 	out := make(chan StreamPart, 8)
 	done := make(chan struct{})
@@ -171,7 +157,7 @@ func TestPhase3MessageStopFinishesWithoutEOF(t *testing.T) {
 	}
 }
 
-func TestPhase3SSESyntaxVariantsLargeAndFinalRecord(t *testing.T) {
+func TestStreamSSESyntaxVariantsLargeAndFinalRecord(t *testing.T) {
 	large := strings.Repeat("x", 128*1024)
 	response := &StreamResponse{}
 	out := make(chan StreamPart, 8)
@@ -194,14 +180,14 @@ func TestPhase3SSESyntaxVariantsLargeAndFinalRecord(t *testing.T) {
 	}
 }
 
-func TestPhase3BlockLifecycleAndDeltaCompatibility(t *testing.T) {
+func TestStreamBlockLifecycleAndDeltaCompatibility(t *testing.T) {
 	prefix := event("message_start", `{"message":{"id":"m","model":"c"}}`)
 	sse := prefix +
 		event("content_block_start", `{"index":0,"content_block":{"type":"text"}}`) + event("content_block_delta", `{"index":0,"delta":{"type":"text_delta","text":"text"}}`) + event("content_block_stop", `{"index":0}`) +
 		event("content_block_start", `{"index":1,"content_block":{"type":"thinking"}}`) + event("content_block_delta", `{"index":1,"delta":{"type":"thinking_delta","thinking":"thought"}}`) + event("content_block_delta", `{"index":1,"delta":{"type":"signature_delta","signature":"sig"}}`) + event("content_block_stop", `{"index":1}`) +
 		event("content_block_start", `{"index":2,"content_block":{"type":"source","id":"source"}}`) + event("content_block_stop", `{"index":2}`) +
 		event("content_block_start", `{"index":3,"content_block":{"type":"tool_result","tool_use_id":"call"}}`) + event("content_block_stop", `{"index":3}`) + event("message_stop", `{}`)
-	parts := parsePhase3(t, sse)
+	parts := parseStream(t, sse)
 	if len(parts) != 12 || parts[3].(StreamTextDelta).Text != "text" || parts[6].(StreamReasoningDelta).Delta.(ThinkingDelta).Thinking != "thought" || parts[7].(StreamReasoningDelta).Delta.(SignatureDelta).Signature != "sig" {
 		t.Fatalf("parts = %#v", parts)
 	}
@@ -228,7 +214,7 @@ func TestPhase3BlockLifecycleAndDeltaCompatibility(t *testing.T) {
 		{"mcp delta for tool", prefix + event("content_block_start", `{"index":0,"content_block":{"type":"tool_use"}}`) + event("content_block_delta", `{"index":0,"delta":{"type":"mcp_tool_use_delta"}}`)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			parts := parsePhase3(t, tc.sse)
+			parts := parseStream(t, tc.sse)
 			if _, ok := parts[len(parts)-1].(StreamError); !ok {
 				t.Fatalf("parts = %#v", parts)
 			}
@@ -236,9 +222,9 @@ func TestPhase3BlockLifecycleAndDeltaCompatibility(t *testing.T) {
 	}
 }
 
-func TestPhase3ToolInitialInputAndStreamErrors(t *testing.T) {
+func TestStreamToolInitialInputAndErrors(t *testing.T) {
 	prefix := event("message_start", `{"message":{"id":"m","model":"c"}}`)
-	parts := parsePhase3(t, prefix+event("content_block_start", `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"weather","input":{"city":"SF"}}}`)+event("content_block_stop", `{"index":0}`)+event("message_stop", `{}`))
+	parts := parseStream(t, prefix+event("content_block_start", `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"weather","input":{"city":"SF"}}}`)+event("content_block_stop", `{"index":0}`)+event("message_stop", `{}`))
 	if got := string(parts[4].(StreamToolCall).Input); got != `{"city":"SF"}` {
 		t.Fatalf("initial tool input = %s", got)
 	}
@@ -247,12 +233,12 @@ func TestPhase3ToolInitialInputAndStreamErrors(t *testing.T) {
 		`{"error":{"type":"api_error"}}`,
 		`not json`,
 	} {
-		parts := parsePhase3(t, prefix+event("error", payload))
+		parts := parseStream(t, prefix+event("error", payload))
 		if _, ok := parts[len(parts)-1].(StreamError); !ok {
 			t.Fatalf("payload %q parts = %#v", payload, parts)
 		}
 	}
-	parts = parsePhase3(t, prefix+event("content_block_start", `{"index":0,"content_block":{"type":"tool_use"}}`)+event("content_block_delta", `{"index":0,"delta":{"type":"input_json_delta","partial_json":"{"}}`)+event("content_block_stop", `{"index":0}`))
+	parts = parseStream(t, prefix+event("content_block_start", `{"index":0,"content_block":{"type":"tool_use"}}`)+event("content_block_delta", `{"index":0,"delta":{"type":"input_json_delta","partial_json":"{"}}`)+event("content_block_stop", `{"index":0}`))
 	if _, ok := parts[len(parts)-1].(StreamError); !ok {
 		t.Fatalf("malformed tool input parts = %#v", parts)
 	}

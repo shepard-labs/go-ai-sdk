@@ -20,7 +20,7 @@ import (
 // added once from the top level, never summed from iterations. Streaming assigns
 // message_start input/cache, then message_delta replaces every present usage field
 // (including repeated, zero, or decreased values); absent fields preserve prior raw values.
-func TestPhase5UsageEquationsAndRawFields(t *testing.T) {
+func TestUsageUsageEquationsAndRawFields(t *testing.T) {
 	thinking := uint64(4)
 	raw := json.RawMessage(`{"input_tokens":99,"unknown":{"kept":true}}`)
 	usage, err := usageFromAPIUsage(apiResponseUsage{
@@ -37,7 +37,7 @@ func TestPhase5UsageEquationsAndRawFields(t *testing.T) {
 	}
 }
 
-func TestPhase5UsageIterationsFallbackAndCacheAreAdditive(t *testing.T) {
+func TestUsageUsageIterationsFallbackAndCacheAreAdditive(t *testing.T) {
 	for _, tc := range []struct {
 		name                       string
 		iterations                 []apiUsageIteration
@@ -73,10 +73,10 @@ func TestPhase5UsageIterationsFallbackAndCacheAreAdditive(t *testing.T) {
 	}
 }
 
-func TestPhase5StreamPresentFieldsReplaceAndAbsentPreserve(t *testing.T) {
+func TestUsageStreamPresentFieldsReplaceAndAbsentPreserve(t *testing.T) {
 	sse := event("message_start", `{"message":{"id":"m","model":"c","usage":{"input_tokens":9,"cache_read_input_tokens":5,"service_tier":"standard","inference_geo":"us","cache_creation":{"ephemeral_5m_input_tokens":2},"server_tool_use":{"web_search_requests":1},"raw_start":"kept"}}}`) +
 		event("message_delta", `{"delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":3,"output_tokens":7,"cache_read_input_tokens":0,"output_tokens_details":{"thinking_tokens":2},"raw_delta":"kept"}}`) + event("message_stop", `{}`)
-	parts := parsePhase3(t, sse)
+	parts := parseStream(t, sse)
 	finish := parts[len(parts)-1].(StreamFinish)
 	if finish.Usage.InputTokens.Total != 3 || finish.Usage.InputTokens.CacheRead != 0 || finish.Usage.OutputTokens.Text != 5 || finish.Usage.OutputTokens.Reasoning != 2 {
 		t.Fatalf("usage = %#v", finish.Usage)
@@ -94,9 +94,9 @@ func TestPhase5StreamPresentFieldsReplaceAndAbsentPreserve(t *testing.T) {
 	}
 }
 
-func TestPhase5DuplicateStartsProduceOneFinishOrOneError(t *testing.T) {
+func TestUsageDuplicateStartsProduceOneFinishOrOneError(t *testing.T) {
 	start := `{"message":{"id":"m","model":"c","usage":{"input_tokens":1}}}`
-	parts := parsePhase3(t, event("message_start", start)+event("message_start", start)+event("message_stop", `{}`))
+	parts := parseStream(t, event("message_start", start)+event("message_start", start)+event("message_stop", `{}`))
 	if len(parts) != 3 {
 		t.Fatalf("parts = %#v", parts)
 	}
@@ -104,7 +104,7 @@ func TestPhase5DuplicateStartsProduceOneFinishOrOneError(t *testing.T) {
 		t.Fatalf("parts = %#v", parts)
 	}
 
-	parts = parsePhase3(t, event("message_start", start)+event("message_start", `{"message":{"id":"other","model":"c","usage":{"input_tokens":1}}}`))
+	parts = parseStream(t, event("message_start", start)+event("message_start", `{"message":{"id":"other","model":"c","usage":{"input_tokens":1}}}`))
 	if len(parts) != 3 {
 		t.Fatalf("parts = %#v", parts)
 	}
@@ -113,7 +113,7 @@ func TestPhase5DuplicateStartsProduceOneFinishOrOneError(t *testing.T) {
 	}
 }
 
-func TestPhase5UsageOverflowTypedAndTerminal(t *testing.T) {
+func TestUsageUsageOverflowTypedAndTerminal(t *testing.T) {
 	_, err := usageFromAPIUsage(apiResponseUsage{InputTokens: math.MaxUint64, CacheReadInputTokens: 1})
 	var conversion *UsageConversionError
 	if !errors.As(err, &conversion) {
@@ -121,7 +121,7 @@ func TestPhase5UsageOverflowTypedAndTerminal(t *testing.T) {
 	}
 	sse := event("message_start", `{"message":{"id":"m","model":"c","usage":{"input_tokens":18446744073709551615}}}`) +
 		event("message_delta", `{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`) + event("message_stop", `{}`)
-	parts := parsePhase3(t, sse)
+	parts := parseStream(t, sse)
 	if len(parts) != 3 {
 		t.Fatalf("parts = %#v", parts)
 	}
@@ -131,7 +131,7 @@ func TestPhase5UsageOverflowTypedAndTerminal(t *testing.T) {
 	}
 }
 
-func TestPhase5LegacyUsageAPICompatibility(t *testing.T) {
+func TestUsageLegacyUsageAPICompatibility(t *testing.T) {
 	var _ int = ResponseUsage{}.InputTokens
 	usage := UsageFromResponseUsage(ResponseUsage{
 		InputTokens: 3, OutputTokens: 2,
@@ -142,7 +142,7 @@ func TestPhase5LegacyUsageAPICompatibility(t *testing.T) {
 	}
 }
 
-func TestPhase5NegativeTextEquation(t *testing.T) {
+func TestUsageNegativeTextEquation(t *testing.T) {
 	thinking := uint64(7)
 	usage, err := usageFromAPIUsage(apiResponseUsage{OutputTokens: 3, OutputTokensDetails: &OutputTokensDetails{ThinkingTokens: &thinking}})
 	if err != nil {
@@ -153,7 +153,7 @@ func TestPhase5NegativeTextEquation(t *testing.T) {
 	}
 }
 
-func TestPhase5NonStreamRawExactAndDeepCopied(t *testing.T) {
+func TestUsageNonStreamRawExactAndDeepCopied(t *testing.T) {
 	raw := []byte("{ \"output_tokens\" : 2, \"input_tokens\":1, \"unknown\": true }")
 	var api apiUsage
 	if err := json.Unmarshal(raw, &api); err != nil {
