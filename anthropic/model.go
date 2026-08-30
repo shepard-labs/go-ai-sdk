@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -77,23 +78,29 @@ func (m *anthropicLanguageModel) DoGenerate(ctx context.Context, opts GenerateOp
 
 func (m *anthropicLanguageModel) DoStream(ctx context.Context, opts StreamOptions) (*StreamResult, error) {
 	m.provider.logger.Debug("anthropic stream request", "model", m.modelID)
+	streamCtx, cancel := context.WithCancel(ctx)
 	request, warnings, requestOptions, replaySafe, err := m.buildRequestWithOptions(GenerateOptions(opts), true)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	resp, err := m.execute(ctx, body, requestOptions, replaySafe)
+	resp, err := m.execute(streamCtx, body, requestOptions, replaySafe)
 	if err != nil {
+		cancel()
 		m.provider.logger.Error("anthropic stream request failed", "model", m.modelID, "error", err)
 		return nil, err
 	}
 	if resp == nil {
+		cancel()
 		return nil, &APICallError{Message: "fetcher returned nil response and nil error", Retryable: true}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer cancel()
 		defer resp.Body.Close()
 		respBody, truncated, readErr := readLimited(resp.Body, m.provider.maxErrorResponseBytes)
 		err := apiCallError(resp, respBody, truncated, readErr)
@@ -101,15 +108,21 @@ func (m *anthropicLanguageModel) DoStream(ctx context.Context, opts StreamOption
 		return nil, err
 	}
 
-	parts := make(chan StreamPart)
-	result := &StreamResult{Stream: parts, Parts: parts, Request: body, Response: &StreamResponse{Headers: resp.Header, ModelID: m.modelID}}
+	parts := make(chan StreamPart, 16)
+	cancelStream := func() {
+		cancel()
+		_ = resp.Body.Close()
+	}
+	result := &StreamResult{Stream: parts, Parts: parts, Request: body, Response: &StreamResponse{Headers: resp.Header, ModelID: m.modelID}, Cancel: cancelStream}
 	go func() {
 		defer close(parts)
-		defer resp.Body.Close()
+		defer cancelStream()
 		for _, warning := range warnings {
-			parts <- StreamRaw{Event: warning}
+			if !sendStreamPart(streamCtx, parts, StreamRaw{Event: warning}) {
+				return
+			}
 		}
-		parseSSEStream(resp.Body, parts, result.Response)
+		parseSSEStream(streamCtx, resp.Body, parts, result.Response)
 	}()
 	return result, nil
 }
@@ -913,94 +926,177 @@ func responseRequestID(header http.Header) string {
 	return ""
 }
 
-func parseSSEStream(reader io.Reader, out chan<- StreamPart, response *StreamResponse) {
+func sendStreamPart(ctx context.Context, out chan<- StreamPart, part StreamPart) bool {
+	select {
+	case out <- part:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// parseSSEStream reads complete SSE records without Scanner's token limit. It
+// honors CRLF, comments, optional single-space field separation, repeated data
+// fields, unknown fields, and an unterminated final record.
+func parseSSEStream(ctx context.Context, reader io.Reader, out chan<- StreamPart, response *StreamResponse) {
 	buffered := bufio.NewReader(reader)
 	var eventType string
-	var data strings.Builder
-	blockTypes := map[string]string{}
+	var data []string
+	state := streamParserState{blocks: make(map[int]*streamBlockState), finish: StreamFinish{FinishReason: FinishReasonUnknown}}
+	dispatch := func() bool {
+		if eventType == "" && len(data) == 0 {
+			return true
+		}
+		if state.stopped {
+			sendStreamPart(ctx, out, StreamError{Err: fmt.Errorf("event after terminal message_stop")})
+			return false
+		}
+		parts, err := state.handle(eventType, []byte(strings.Join(data, "\n")))
+		if err != nil {
+			sendStreamPart(ctx, out, StreamError{Err: err})
+			return false
+		}
+		for _, part := range parts {
+			if metadata, ok := part.(StreamResponseMetadata); ok && response != nil {
+				response.ID = metadata.ID
+				response.ModelID = metadata.ModelID
+			}
+			if !sendStreamPart(ctx, out, part) {
+				return false
+			}
+		}
+		eventType, data = "", nil
+		return !state.stopped
+	}
 	for {
 		line, err := buffered.ReadString('\n')
-		if err != nil && len(line) == 0 {
+		if len(line) > 0 {
+			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			if line == "" {
+				if !dispatch() {
+					return
+				}
+			} else if line[0] != ':' {
+				field, value, found := strings.Cut(line, ":")
+				if !found {
+					value = ""
+				} else if strings.HasPrefix(value, " ") {
+					value = value[1:]
+				}
+				switch field {
+				case "event":
+					eventType = value
+				case "data":
+					data = append(data, value)
+				}
+			}
+		}
+		if err != nil {
 			if err != io.EOF {
-				out <- StreamError{Err: err}
-			} else if eventType != "" || data.Len() > 0 {
-				emitSSEEvent(eventType, data.String(), out, blockTypes, response)
+				sendStreamPart(ctx, out, StreamError{Err: err})
+				return
 			}
-			return
-		}
-		line = strings.TrimSuffix(line, "\n")
-		line = strings.TrimSuffix(line, "\r")
-		if line == "" {
-			emitSSEEvent(eventType, data.String(), out, blockTypes, response)
-			eventType = ""
-			data.Reset()
-		} else if strings.HasPrefix(line, "event: ") {
-			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event: "))
-		} else if strings.HasPrefix(line, "data: ") {
-			if data.Len() > 0 {
-				data.WriteByte('\n')
+			if !dispatch() {
+				return
 			}
-			data.WriteString(strings.TrimPrefix(line, "data: "))
-		}
-		if err == io.EOF {
-			if eventType != "" || data.Len() > 0 {
-				emitSSEEvent(eventType, data.String(), out, blockTypes, response)
+			if !state.stopped {
+				sendStreamPart(ctx, out, StreamError{Err: fmt.Errorf("anthropic stream ended before message_stop")})
 			}
 			return
 		}
 	}
 }
 
-func emitSSEEvent(eventType, data string, out chan<- StreamPart, blockTypes map[string]string, response *StreamResponse) {
+type streamBlockState struct {
+	typ, id, name             string
+	providerExecuted, dynamic bool
+	providerMetadata          ProviderMetadata
+	initialInput              []byte
+	hasInputDelta             bool
+	input                     strings.Builder
+}
+
+type streamParserState struct {
+	started, messageDeltaSeen, stopped bool
+	messageID, model                   string
+	initialUsage                       apiUsage
+	blocks                             map[int]*streamBlockState
+	finish                             StreamFinish
+}
+
+func (s *streamParserState) handle(eventType string, data []byte) ([]StreamPart, error) {
 	if eventType == "" || eventType == "ping" {
-		return
+		return nil, nil
+	}
+	if s.messageDeltaSeen && eventType != "message_stop" {
+		return nil, fmt.Errorf("%s after message_delta", eventType)
 	}
 	if eventType == "error" {
-		out <- StreamError{Err: streamingAPIError(data)}
-		return
+		return nil, streamingAPIError(string(data))
 	}
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		out <- StreamError{Err: err}
-		return
+	if !s.started && eventType != "message_start" {
+		return nil, fmt.Errorf("%s before message_start", eventType)
 	}
 	switch eventType {
 	case "message_start":
 		var message struct {
-			Message struct{ ID, Model string } `json:"message"`
+			Message struct {
+				ID, Model string
+				Usage     apiUsage `json:"usage"`
+			} `json:"message"`
 		}
-		_ = json.Unmarshal([]byte(data), &message)
-		response.ID = message.Message.ID
-		response.ModelID = message.Message.Model
-		out <- StreamStart{}
-		out <- StreamResponseMetadata{ID: message.Message.ID, ModelID: message.Message.Model}
+		if err := json.Unmarshal(data, &message); err != nil {
+			return nil, err
+		}
+		if message.Message.ID == "" || message.Message.Model == "" {
+			return nil, fmt.Errorf("message_start missing id or model")
+		}
+		if s.started {
+			if s.messageID == message.Message.ID && s.model == message.Message.Model && reflect.DeepEqual(s.initialUsage, message.Message.Usage) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("conflicting duplicate message_start")
+		}
+		s.started, s.messageID, s.model, s.initialUsage = true, message.Message.ID, message.Message.Model, message.Message.Usage
+		return []StreamPart{StreamStart{}, StreamResponseMetadata{ID: s.messageID, ModelID: s.model}}, nil
 	case "content_block_start":
 		var event struct {
-			Index        int             `json:"index"`
+			Index        *int            `json:"index"`
 			ContentBlock apiContentBlock `json:"content_block"`
 		}
-		_ = json.Unmarshal([]byte(data), &event)
-		id := fmt.Sprint(event.Index)
-		blockTypes[id] = event.ContentBlock.Type
+		if err := json.Unmarshal(data, &event); err != nil {
+			return nil, err
+		}
+		if event.Index == nil || *event.Index < 0 {
+			return nil, fmt.Errorf("content_block_start missing or invalid index")
+		}
+		if _, exists := s.blocks[*event.Index]; exists {
+			return nil, fmt.Errorf("duplicate content block index %d", *event.Index)
+		}
+		id := fmt.Sprint(*event.Index)
+		block := &streamBlockState{typ: event.ContentBlock.Type, id: event.ContentBlock.ID, name: event.ContentBlock.Name, providerExecuted: event.ContentBlock.ProviderExecuted, dynamic: event.ContentBlock.Dynamic, providerMetadata: event.ContentBlock.ProviderMetadata}
+		s.blocks[*event.Index] = block
 		switch event.ContentBlock.Type {
 		case "thinking", "redacted_thinking":
-			out <- StreamReasoningStart{ID: id}
-		case "input_json":
-			out <- StreamToolInputStart{ID: id, ToolName: event.ContentBlock.Name, ProviderExecuted: event.ContentBlock.ProviderExecuted, Dynamic: event.ContentBlock.Dynamic}
-		case "tool_use", "server_tool_use":
-			out <- StreamToolCall{ToolCallContent: ToolCallContent{Type: streamToolCallType(event.ContentBlock.Type), ToolCallID: event.ContentBlock.ID, ToolName: event.ContentBlock.Name, Input: anyToRawJSON(event.ContentBlock.Input), ProviderExecuted: event.ContentBlock.ProviderExecuted || event.ContentBlock.Type != "tool_use", Dynamic: event.ContentBlock.Dynamic, ProviderMetadata: event.ContentBlock.ProviderMetadata}}
-		case "mcp_tool_use":
-			out <- StreamToolCall{ToolCallContent: ToolCallContent{Type: "mcp-tool-call", ToolCallID: event.ContentBlock.ID, ToolName: event.ContentBlock.Name, Input: anyToRawJSON(event.ContentBlock.Input), ProviderExecuted: true, Dynamic: event.ContentBlock.Dynamic, ProviderMetadata: event.ContentBlock.ProviderMetadata}}
+			return []StreamPart{StreamReasoningStart{ID: id}}, nil
+		case "input_json", "tool_use", "server_tool_use", "mcp_tool_use":
+			if event.ContentBlock.Input != nil {
+				block.initialInput = append([]byte(nil), anyToRawJSON(event.ContentBlock.Input)...)
+			}
+			return []StreamPart{StreamToolInputStart{ID: id, ToolName: block.name, ProviderExecuted: block.providerExecuted || block.typ == "server_tool_use" || block.typ == "mcp_tool_use", Dynamic: block.dynamic}}, nil
 		case "source", "web_search_result", "web_fetch_result":
-			out <- StreamSource{SourceContent: SourceContent{SourceType: event.ContentBlock.Type, ID: event.ContentBlock.ID, URL: event.ContentBlock.URL, Title: event.ContentBlock.Title, MediaType: event.ContentBlock.MediaType, Filename: event.ContentBlock.Filename}, ProviderMetadata: event.ContentBlock.ProviderMetadata}
+			return []StreamPart{StreamSource{SourceContent: SourceContent{SourceType: event.ContentBlock.Type, ID: event.ContentBlock.ID, URL: event.ContentBlock.URL, Title: event.ContentBlock.Title, MediaType: event.ContentBlock.MediaType, Filename: event.ContentBlock.Filename}, ProviderMetadata: event.ContentBlock.ProviderMetadata}}, nil
 		case "tool_result", "mcp_tool_result", "web_fetch_tool_result", "web_search_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result", "advisor_tool_result":
-			out <- StreamToolResult{ToolResultContent: ToolResultContent{ToolCallID: event.ContentBlock.ToolUseID, Result: parseToolResultParts(event.ContentBlock.Content), IsError: event.ContentBlock.IsError, ProviderExecuted: event.ContentBlock.ProviderExecuted, Dynamic: event.ContentBlock.Dynamic, ProviderMetadata: event.ContentBlock.ProviderMetadata}}
+			return []StreamPart{StreamToolResult{ToolResultContent: ToolResultContent{ToolCallID: event.ContentBlock.ToolUseID, Result: parseToolResultParts(event.ContentBlock.Content), IsError: event.ContentBlock.IsError, ProviderExecuted: event.ContentBlock.ProviderExecuted, Dynamic: event.ContentBlock.Dynamic, ProviderMetadata: event.ContentBlock.ProviderMetadata}}}, nil
+		case "text":
+			return []StreamPart{StreamTextStart{ID: id}}, nil
 		default:
-			out <- StreamTextStart{ID: id}
+			delete(s.blocks, *event.Index)
+			return nil, fmt.Errorf("unsupported content block type %q", event.ContentBlock.Type)
 		}
 	case "content_block_delta":
 		var event struct {
-			Index int `json:"index"`
+			Index *int `json:"index"`
 			Delta struct {
 				Type        string     `json:"type"`
 				Text        string     `json:"text"`
@@ -1008,36 +1104,102 @@ func emitSSEEvent(eventType, data string, out chan<- StreamPart, blockTypes map[
 				Signature   string     `json:"signature"`
 				PartialJSON string     `json:"partial_json"`
 				Citations   []Citation `json:"citations"`
+				Citation    *Citation  `json:"citation"`
 			} `json:"delta"`
 		}
-		_ = json.Unmarshal([]byte(data), &event)
-		id := fmt.Sprint(event.Index)
+		if err := json.Unmarshal(data, &event); err != nil {
+			return nil, err
+		}
+		if event.Index == nil || *event.Index < 0 {
+			return nil, fmt.Errorf("content_block_delta missing or invalid index")
+		}
+		block, ok := s.blocks[*event.Index]
+		if !ok {
+			return nil, fmt.Errorf("delta for inactive content block %d", *event.Index)
+		}
+		id := fmt.Sprint(*event.Index)
 		switch event.Delta.Type {
 		case "text_delta":
-			out <- StreamTextDelta{ID: id, Text: event.Delta.Text, Citations: normalizeCitations(event.Delta.Citations)}
+			if block.typ != "text" {
+				return nil, fmt.Errorf("text delta for %s block", block.typ)
+			}
+			return []StreamPart{StreamTextDelta{ID: id, Text: event.Delta.Text, Citations: normalizeCitations(event.Delta.Citations)}}, nil
 		case "citations_delta":
-			out <- StreamTextDelta{ID: id, Citations: normalizeCitations(event.Delta.Citations)}
+			if block.typ != "text" {
+				return nil, fmt.Errorf("citation delta for %s block", block.typ)
+			}
+			citations := event.Delta.Citations
+			if event.Delta.Citation != nil {
+				citations = append(citations, *event.Delta.Citation)
+			}
+			return []StreamPart{StreamTextDelta{ID: id, Citations: normalizeCitations(citations)}}, nil
 		case "thinking_delta":
-			out <- StreamReasoningDelta{ID: id, Delta: ThinkingDelta{Thinking: event.Delta.Thinking}}
+			if block.typ != "thinking" && block.typ != "redacted_thinking" {
+				return nil, fmt.Errorf("thinking delta for %s block", block.typ)
+			}
+			return []StreamPart{StreamReasoningDelta{ID: id, Delta: ThinkingDelta{Thinking: event.Delta.Thinking}}}, nil
 		case "signature_delta":
-			out <- StreamReasoningDelta{ID: id, Delta: SignatureDelta{Signature: event.Delta.Signature}}
+			if block.typ != "thinking" && block.typ != "redacted_thinking" {
+				return nil, fmt.Errorf("signature delta for %s block", block.typ)
+			}
+			return []StreamPart{StreamReasoningDelta{ID: id, Delta: SignatureDelta{Signature: event.Delta.Signature}}}, nil
 		case "input_json_delta":
-			out <- StreamToolInputDelta{ID: id, Delta: InputJSONDelta{PartialJSON: event.Delta.PartialJSON}}
+			if block.typ != "input_json" && block.typ != "tool_use" && block.typ != "server_tool_use" {
+				return nil, fmt.Errorf("input delta for %s block", block.typ)
+			}
+			block.hasInputDelta = true
+			block.input.WriteString(event.Delta.PartialJSON)
+			return []StreamPart{StreamToolInputDelta{ID: id, Delta: InputJSONDelta{PartialJSON: event.Delta.PartialJSON}}}, nil
 		case "mcp_tool_use_delta":
-			out <- StreamToolInputDelta{ID: id, Delta: InputJSONDelta{PartialJSON: event.Delta.PartialJSON}}
+			if block.typ != "mcp_tool_use" {
+				return nil, fmt.Errorf("mcp input delta for %s block", block.typ)
+			}
+			block.hasInputDelta = true
+			block.input.WriteString(event.Delta.PartialJSON)
+			return []StreamPart{StreamToolInputDelta{ID: id, Delta: InputJSONDelta{PartialJSON: event.Delta.PartialJSON}}}, nil
+		default:
+			return nil, fmt.Errorf("unsupported delta type %q", event.Delta.Type)
 		}
 	case "content_block_stop":
 		var event struct {
-			Index int `json:"index"`
+			Index *int `json:"index"`
 		}
-		_ = json.Unmarshal([]byte(data), &event)
-		id := fmt.Sprint(event.Index)
-		if blockTypes[id] == "thinking" || blockTypes[id] == "redacted_thinking" {
-			out <- StreamReasoningEnd{ID: id}
-		} else if blockTypes[id] == "input_json" || blockTypes[id] == "mcp_tool_use" {
-			out <- StreamToolInputEnd{ID: id}
-		} else {
-			out <- StreamTextEnd{ID: id}
+		if err := json.Unmarshal(data, &event); err != nil {
+			return nil, err
+		}
+		if event.Index == nil || *event.Index < 0 {
+			return nil, fmt.Errorf("content_block_stop missing or invalid index")
+		}
+		block, ok := s.blocks[*event.Index]
+		if !ok {
+			return nil, fmt.Errorf("stop for inactive content block %d", *event.Index)
+		}
+		delete(s.blocks, *event.Index)
+		id := fmt.Sprint(*event.Index)
+		switch block.typ {
+		case "thinking", "redacted_thinking":
+			return []StreamPart{StreamReasoningEnd{ID: id}}, nil
+		case "text":
+			return []StreamPart{StreamTextEnd{ID: id}}, nil
+		case "input_json", "tool_use", "server_tool_use", "mcp_tool_use":
+			raw := block.initialInput
+			if block.hasInputDelta {
+				raw = []byte(block.input.String())
+			}
+			if len(raw) == 0 {
+				raw = []byte("{}")
+			}
+			var object map[string]json.RawMessage
+			if json.Unmarshal(raw, &object) != nil || object == nil {
+				return nil, fmt.Errorf("tool input for block %d is not a valid JSON object", *event.Index)
+			}
+			parts := []StreamPart{StreamToolInputEnd{ID: id}}
+			if block.typ != "input_json" {
+				parts = append(parts, StreamToolCall{ToolCallContent: ToolCallContent{Type: streamToolCallType(block.typ), ToolCallID: block.id, ToolName: block.name, Input: append(json.RawMessage(nil), raw...), ProviderExecuted: block.providerExecuted || block.typ != "tool_use", Dynamic: block.dynamic, ProviderMetadata: block.providerMetadata}})
+			}
+			return parts, nil
+		case "source", "web_search_result", "web_fetch_result", "tool_result", "mcp_tool_result", "web_fetch_tool_result", "web_search_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result", "advisor_tool_result":
+			return nil, nil
 		}
 	case "message_delta":
 		var event struct {
@@ -1046,11 +1208,44 @@ func emitSSEEvent(eventType, data string, out chan<- StreamPart, blockTypes map[
 			} `json:"delta"`
 			Usage apiUsage `json:"usage"`
 		}
-		_ = json.Unmarshal([]byte(data), &event)
-		out <- StreamFinish{FinishReason: FinishReasonFromStopReason(event.Delta.StopReason), Usage: UsageFromResponseUsage(ResponseUsage{InputTokens: event.Usage.InputTokens, OutputTokens: event.Usage.OutputTokens, CacheCreationInputTokens: event.Usage.CacheCreationInputTokens, CacheReadInputTokens: event.Usage.CacheReadInputTokens})}
+		if err := json.Unmarshal(data, &event); err != nil {
+			return nil, err
+		}
+		if len(s.blocks) != 0 {
+			return nil, fmt.Errorf("message_delta with active content blocks")
+		}
+		s.messageDeltaSeen = true
+		usage := s.initialUsage
+		if event.Usage.InputTokens != 0 {
+			usage.InputTokens = event.Usage.InputTokens
+		}
+		if event.Usage.OutputTokens != 0 {
+			usage.OutputTokens = event.Usage.OutputTokens
+		}
+		if event.Usage.CacheCreationInputTokens != 0 {
+			usage.CacheCreationInputTokens = event.Usage.CacheCreationInputTokens
+		}
+		if event.Usage.CacheReadInputTokens != 0 {
+			usage.CacheReadInputTokens = event.Usage.CacheReadInputTokens
+		}
+		if event.Usage.ServiceTier != "" {
+			usage.ServiceTier = event.Usage.ServiceTier
+		}
+		if event.Usage.Iterations != nil {
+			usage.Iterations = event.Usage.Iterations
+		}
+		s.finish = StreamFinish{FinishReason: FinishReasonFromStopReason(event.Delta.StopReason), Usage: UsageFromResponseUsage(ResponseUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CacheCreationInputTokens: usage.CacheCreationInputTokens, CacheReadInputTokens: usage.CacheReadInputTokens, ServiceTier: usage.ServiceTier, Iterations: usage.Iterations})}
+		return nil, nil
 	case "message_stop":
-		out <- StreamFinish{FinishReason: FinishReasonStop}
+		if len(s.blocks) != 0 {
+			return nil, fmt.Errorf("message_stop with active content blocks")
+		}
+		s.stopped = true
+		return []StreamPart{s.finish}, nil
+	default:
+		return nil, fmt.Errorf("unsupported event type %q", eventType)
 	}
+	return nil, nil
 }
 
 func streamToolCallType(apiType string) string {
@@ -1068,7 +1263,12 @@ func streamingAPIError(data string) error {
 	var event struct {
 		Error APIError `json:"error"`
 	}
-	_ = json.Unmarshal([]byte(data), &event)
+	if err := json.Unmarshal([]byte(data), &event); err != nil {
+		return fmt.Errorf("decode error event: %w", err)
+	}
+	if event.Error.Message == "" {
+		return fmt.Errorf("invalid error event payload")
+	}
 	status := http.StatusInternalServerError
 	if event.Error.Type == "overloaded_error" {
 		status = 529

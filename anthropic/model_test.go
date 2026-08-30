@@ -409,11 +409,12 @@ func TestDoGenerateSuccessBodyLimit(t *testing.T) {
 }
 
 func TestDoStreamTextOnly(t *testing.T) {
-	sse := "event: message_start\ndata: {\"message\":{\"id\":\"msg_1\",\"model\":\"claude-3-haiku-20240307\"}}\n\n" +
+	sse := "event: message_start\ndata: {\"message\":{\"id\":\"msg_1\",\"model\":\"claude-provider-model\"}}\n\n" +
 		"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n" +
 		"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n" +
 		"event: content_block_stop\ndata: {\"index\":0}\n\n" +
-		"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n"
+		"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+		"event: message_stop\ndata: {}\n\n"
 	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return textResponse(200, sse), nil }}
 	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
 	result, err := model.DoStream(context.Background(), StreamOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "hello"}}}}})
@@ -421,11 +422,54 @@ func TestDoStreamTextOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var parts []StreamPart
+	terminalReceived := false
 	for part := range result.Stream {
 		parts = append(parts, part)
+		_, terminalReceived = part.(StreamFinish)
 	}
-	if len(parts) != 6 || parts[0].(StreamStart) != (StreamStart{}) || parts[1].(StreamResponseMetadata).ID != "msg_1" || parts[3].(StreamTextDelta).Text != "hi" || result.Response.ID != "msg_1" {
+	if !terminalReceived {
+		t.Fatal("stream closed without terminal event")
+	}
+	if len(parts) != 6 || parts[0].(StreamStart) != (StreamStart{}) || parts[1].(StreamResponseMetadata).ID != "msg_1" || parts[1].(StreamResponseMetadata).ModelID != "claude-provider-model" || parts[3].(StreamTextDelta).Text != "hi" || parts[5].(StreamFinish).Usage.OutputTokens.Total != 1 || result.Response.ID != "msg_1" || result.Response.ModelID != "claude-provider-model" {
 		t.Fatalf("parts = %#v response = %#v", parts, result.Response)
+	}
+}
+
+type blockingStreamBody struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (b *blockingStreamBody) Read([]byte) (int, error) {
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (b *blockingStreamBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+func TestDoStreamCancelInterruptsBlockedBodyRead(t *testing.T) {
+	body := &blockingStreamBody{closed: make(chan struct{})}
+	fetcher := roundTripFetcher{fn: func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: body, Request: req}, nil
+	}}
+	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
+	result, err := model.DoStream(context.Background(), StreamOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.Cancel()
+	select {
+	case <-result.Stream:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not close after cancellation")
+	}
+	select {
+	case <-body.closed:
+	default:
+		t.Fatal("stream body was not closed after cancellation")
 	}
 }
 
@@ -458,13 +502,19 @@ func TestModelConcurrentGenerateReuse(t *testing.T) {
 
 func TestDoStreamLargeDataLine(t *testing.T) {
 	large := strings.Repeat("a", 128*1024)
-	sse := "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"" + large + "\"}}\n\n"
+	sse := "event: message_start\ndata: {\"message\":{\"id\":\"msg\",\"model\":\"claude\"}}\n\n" +
+		"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"" + large + "\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"index\":0}\n\nevent: message_stop\ndata: {}\n\n"
 	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return textResponse(200, sse), nil }}
 	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
 	result, err := model.DoStream(context.Background(), StreamOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	<-result.Stream
+	<-result.Stream
+	<-result.Stream
 	part := <-result.Stream
 	delta, ok := part.(StreamTextDelta)
 	if !ok || len(delta.Text) != len(large) {
@@ -544,12 +594,17 @@ func TestResponseParseToolCallsAndResults(t *testing.T) {
 }
 
 func TestStreamToolEvents(t *testing.T) {
-	sse := "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"input_json\",\"name\":\"weather\",\"dynamic\":true}}\n\n" +
-		"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\"\"}}\n\n" +
+	sse := "event: message_start\ndata: {\"message\":{\"id\":\"msg\",\"model\":\"claude\"}}\n\n" +
+		"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"input_json\",\"name\":\"weather\",\"dynamic\":true}}\n\n" +
+		"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\\\"SF\\\"}\"}}\n\n" +
 		"event: content_block_stop\ndata: {\"index\":0}\n\n" +
 		"event: content_block_start\ndata: {\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call\",\"name\":\"weather\",\"input\":{\"city\":\"SF\"},\"provider_metadata\":{\"x\":1}}}\n\n" +
+		"event: content_block_stop\ndata: {\"index\":1}\n\n" +
 		"event: content_block_start\ndata: {\"index\":2,\"content_block\":{\"type\":\"tool_result\",\"tool_use_id\":\"call\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],\"provider_executed\":true}}\n\n" +
-		"event: content_block_start\ndata: {\"index\":3,\"content_block\":{\"type\":\"source\",\"id\":\"src\",\"url\":\"https://example.com\",\"title\":\"Example\"}}\n\n"
+		"event: content_block_stop\ndata: {\"index\":2}\n\n" +
+		"event: content_block_start\ndata: {\"index\":3,\"content_block\":{\"type\":\"source\",\"id\":\"src\",\"url\":\"https://example.com\",\"title\":\"Example\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"index\":3}\n\n" +
+		"event: message_stop\ndata: {}\n\n"
 	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return textResponse(200, sse), nil }}
 	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
 	result, err := model.DoStream(context.Background(), StreamOptions{})
@@ -560,7 +615,7 @@ func TestStreamToolEvents(t *testing.T) {
 	for part := range result.Stream {
 		parts = append(parts, part)
 	}
-	if parts[0].(StreamToolInputStart).ToolName != "weather" || !parts[0].(StreamToolInputStart).Dynamic || parts[1].(StreamToolInputDelta).Delta.(InputJSONDelta).PartialJSON == "" || parts[2].(StreamToolInputEnd).ID != "0" || parts[3].(StreamToolCall).ToolName != "weather" || parts[4].(StreamToolResult).Result[0].(ToolResultText).Text != "ok" || parts[5].(StreamSource).URL != "https://example.com" {
+	if parts[2].(StreamToolInputStart).ToolName != "weather" || !parts[2].(StreamToolInputStart).Dynamic || parts[3].(StreamToolInputDelta).Delta.(InputJSONDelta).PartialJSON == "" || parts[4].(StreamToolInputEnd).ID != "0" || parts[7].(StreamToolCall).ToolName != "weather" || parts[8].(StreamToolResult).Result[0].(ToolResultText).Text != "ok" || parts[9].(StreamSource).URL != "https://example.com" {
 		t.Fatalf("parts = %#v", parts)
 	}
 }

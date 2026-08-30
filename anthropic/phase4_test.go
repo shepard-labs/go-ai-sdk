@@ -121,9 +121,12 @@ func TestCacheControlInRequest(t *testing.T) {
 }
 
 func TestMCPToolStreaming(t *testing.T) {
-	sse := "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"mcp_tool_use\",\"id\":\"mcp\",\"name\":\"tool\"}}\n\n" +
+	sse := "event: message_start\ndata: {\"message\":{\"id\":\"msg\",\"model\":\"claude-3-haiku-20240307\",\"usage\":{\"input_tokens\":3}}}\n\n" +
+		"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"mcp_tool_use\",\"id\":\"mcp\",\"name\":\"tool\"}}\n\n" +
 		"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"mcp_tool_use_delta\",\"partial_json\":\"{\\\"a\\\":1}\"}}\n\n" +
-		"event: content_block_stop\ndata: {\"index\":0}\n\n"
+		"event: content_block_stop\ndata: {\"index\":0}\n\n" +
+		"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+		"event: message_stop\ndata: {}\n\n"
 	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return textResponse(200, sse), nil }}
 	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
 	result, err := model.DoStream(context.Background(), StreamOptions{})
@@ -134,8 +137,19 @@ func TestMCPToolStreaming(t *testing.T) {
 	for part := range result.Stream {
 		parts = append(parts, part)
 	}
-	if parts[0].(StreamToolCall).Type != "mcp-tool-call" || parts[1].(StreamToolInputDelta).Delta.(InputJSONDelta).PartialJSON == "" || parts[2].(StreamToolInputEnd).ID != "0" {
+	if len(parts) != 7 {
 		t.Fatalf("parts = %#v", parts)
+	}
+	if parts[2].(StreamToolInputStart).ID != "0" || parts[2].(StreamToolInputStart).ToolName != "tool" || parts[3].(StreamToolInputDelta).Delta.(InputJSONDelta).PartialJSON != `{"a":1}` || parts[4].(StreamToolInputEnd).ID != "0" {
+		t.Fatalf("parts = %#v", parts)
+	}
+	call := parts[5].(StreamToolCall)
+	if call.Type != "mcp-tool-call" || call.ToolCallID != "mcp" || call.ToolName != "tool" || string(call.Input) != `{"a":1}` {
+		t.Fatalf("call = %#v", call)
+	}
+	finish := parts[6].(StreamFinish)
+	if finish.FinishReason != FinishReasonToolCalls || finish.Usage.InputTokens.Total != 3 || finish.Usage.OutputTokens.Total != 1 {
+		t.Fatalf("finish = %#v", finish)
 	}
 }
 

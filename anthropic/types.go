@@ -454,10 +454,13 @@ type ProviderMetadata map[string]any
 type MessageMetadata map[string]any
 
 type StreamResult struct {
-	Stream   <-chan StreamPart
-	Parts    <-chan StreamPart
-	Request  []byte
+	Stream  <-chan StreamPart
+	Parts   <-chan StreamPart
+	Request []byte
+	// Response-derived fields are safe to read after a terminal part or channel close.
 	Response *StreamResponse
+	// Cancel must be called when abandoning a stream without draining it.
+	Cancel context.CancelFunc
 }
 
 type StreamResponse struct {

@@ -20,17 +20,42 @@ func TestCitationsParsing(t *testing.T) {
 }
 
 func TestCitationsStreaming(t *testing.T) {
-	sse := "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"citations_delta\",\"citations\":[{\"type\":\"char_location\",\"cited_text\":\"x\",\"start_char_index\":1,\"end_char_index\":2}]}}\n\n"
+	sse := "event: message_start\ndata: {\"message\":{\"id\":\"msg\",\"model\":\"claude-3-haiku-20240307\",\"usage\":{\"input_tokens\":1}}}\n\n" +
+		"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"citations_delta\",\"citation\":{\"type\":\"char_location\",\"cited_text\":\"x\",\"start_char_index\":1,\"end_char_index\":2}}}\n\n" +
+		"event: content_block_stop\ndata: {\"index\":0}\n\n" +
+		"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+		"event: message_stop\ndata: {}\n\n"
 	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return textResponse(200, sse), nil }}
 	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
 	result, err := model.DoStream(context.Background(), StreamOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	part := <-result.Stream
-	delta := part.(StreamTextDelta)
+	var parts []StreamPart
+	for part := range result.Stream {
+		parts = append(parts, part)
+	}
+	text := parts[3].(StreamTextDelta)
+	if text.Text != "hello" {
+		t.Fatalf("text = %#v", text)
+	}
+	delta := parts[4].(StreamTextDelta)
 	if delta.Citations[0].CitedText != "x" || delta.Citations[0].StartCharIndex != 1 {
 		t.Fatalf("delta = %#v", delta)
+	}
+	finishCount := 0
+	for _, part := range parts {
+		if _, ok := part.(StreamFinish); ok {
+			finishCount++
+		}
+	}
+	if finishCount != 1 {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if finish := parts[len(parts)-1].(StreamFinish); finish.FinishReason != FinishReasonStop || finish.Usage.InputTokens.Total != 1 || finish.Usage.OutputTokens.Total != 1 {
+		t.Fatalf("finish = %#v", finish)
 	}
 }
 
@@ -65,16 +90,36 @@ func TestProviderToolResultErrorParsing(t *testing.T) {
 }
 
 func TestToolResultErrorStreaming(t *testing.T) {
-	sse := "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_result\",\"tool_use_id\":\"call\",\"content\":[{\"type\":\"advisor_error\",\"error_code\":\"bad\"}]}}\n\n"
+	sse := "event: message_start\ndata: {\"message\":{\"id\":\"msg\",\"model\":\"claude-3-haiku-20240307\"}}\n\n" +
+		"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_result\",\"tool_use_id\":\"call\",\"content\":[{\"type\":\"advisor_error\",\"error_code\":\"bad\"}]}}\n\n" +
+		"event: content_block_stop\ndata: {\"index\":0}\n\n" +
+		"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n" +
+		"event: message_stop\ndata: {}\n\n"
 	fetcher := roundTripFetcher{fn: func(*http.Request) (*http.Response, error) { return textResponse(200, sse), nil }}
 	model := CreateAnthropic(ProviderSettings{APIKey: "key", BaseURL: "https://example.test", Fetch: fetcher}).Model("claude-3-haiku-20240307")
 	result, err := model.DoStream(context.Background(), StreamOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	part := <-result.Stream
-	if part.(StreamToolResult).Result[0].(AdvisorError).ErrorCode != "bad" {
-		t.Fatalf("part = %#v", part)
+	var parts []StreamPart
+	for part := range result.Stream {
+		parts = append(parts, part)
+	}
+	toolResult := parts[2].(StreamToolResult)
+	if toolResult.Result[0].(AdvisorError).ErrorCode != "bad" {
+		t.Fatalf("part = %#v", toolResult)
+	}
+	finishCount := 0
+	for _, part := range parts {
+		if _, ok := part.(StreamFinish); ok {
+			finishCount++
+		}
+	}
+	if finishCount != 1 {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if _, ok := parts[len(parts)-1].(StreamFinish); !ok {
+		t.Fatalf("parts = %#v", parts)
 	}
 }
 
