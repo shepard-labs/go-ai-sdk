@@ -717,7 +717,7 @@ func parseContentBlocks(blocks []apiContentBlock) []Content {
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
-			content = append(content, TextContent{Text: block.Text, Citations: normalizeCitations(block.Citations)})
+			content = append(content, TextContent{Text: block.Text, Citations: normalizeCitations(block.Citations), Raw: block.Raw})
 		case "thinking":
 			content = append(content, ReasoningContent{Type: "reasoning", Text: block.Thinking, Signature: block.Signature})
 		case "redacted_thinking":
@@ -727,13 +727,13 @@ func parseContentBlocks(blocks []apiContentBlock) []Content {
 		case "source", "web_search_result", "web_fetch_result":
 			content = append(content, SourceContent{SourceType: block.Type, ID: block.ID, URL: block.URL, Title: block.Title, MediaType: block.MediaType, Filename: block.Filename})
 		case "tool_use":
-			content = append(content, ToolCallContent{Type: "tool-call", ToolCallID: block.ID, ToolName: block.Name, Input: anyToRawJSON(block.Input), ProviderExecuted: block.ProviderExecuted, Dynamic: block.Dynamic, ProviderMetadata: block.ProviderMetadata})
+			content = append(content, ToolCallContent{Type: "tool-call", ToolCallID: block.ID, ToolName: block.Name, Input: anyToRawJSON(block.Input), ProviderExecuted: block.ProviderExecuted, Dynamic: block.Dynamic, Caller: block.Caller, Raw: block.Raw})
 		case "server_tool_use":
-			content = append(content, ToolCallContent{Type: "server-tool-call", ToolCallID: block.ID, ToolName: block.Name, Input: anyToRawJSON(block.Input), ProviderExecuted: true, Dynamic: block.Dynamic, ProviderMetadata: block.ProviderMetadata})
+			content = append(content, ServerToolUseContent{ID: block.ID, Name: block.Name, Input: anyToRawJSON(block.Input), Dynamic: block.Dynamic, Caller: block.Caller, Raw: block.Raw})
 		case "mcp_tool_use":
-			content = append(content, ToolCallContent{Type: "mcp-tool-call", ToolCallID: block.ID, ToolName: block.Name, Input: anyToRawJSON(block.Input), ProviderExecuted: true, Dynamic: block.Dynamic, ProviderMetadata: block.ProviderMetadata})
+			content = append(content, MCPToolUseContent{ID: block.ID, Name: block.Name, ServerName: block.ServerName, Input: anyToRawJSON(block.Input), Dynamic: block.Dynamic, Raw: block.Raw})
 		case "mcp_tool_result", "web_fetch_tool_result", "web_search_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result", "advisor_tool_result", "tool_result":
-			content = append(content, ToolResultContent{ToolCallID: block.ToolUseID, Result: parseToolResultParts(block.Content), IsError: block.IsError, ProviderExecuted: block.ProviderExecuted, Dynamic: block.Dynamic, ProviderMetadata: block.ProviderMetadata})
+			content = append(content, ToolResultContent{Type: block.Type, ToolCallID: block.ToolUseID, Result: parseToolResultParts(block.Content), IsError: block.IsError, ProviderExecuted: block.Type != "tool_result" || block.ProviderExecuted, Dynamic: block.Dynamic, Caller: block.Caller, Raw: block.Raw, RawContent: block.Raw["content"]})
 		}
 	}
 	return content
@@ -774,7 +774,15 @@ func parseToolResultParts(value any) []ToolResultPart {
 		case "web_fetch_error":
 			parts = append(parts, WebFetchError{Type: block.Type, ErrorCode: block.ErrorCode})
 		case "web_fetch_result":
-			parts = append(parts, WebFetchResult{Type: block.Type, URL: block.URL, RetrievedAt: block.RetrievedAt, Content: DocumentContent{Source: DocumentSource{Type: valueOrDefault(block.Type, "document"), MediaType: block.MediaType, Data: block.Data, URL: block.URL}}})
+			var document apiContentBlock
+			if content, err := json.Marshal(block.Content); err == nil {
+				_ = json.Unmarshal(content, &document)
+			}
+			source := DocumentSource{}
+			if document.Source != nil {
+				source = DocumentSource{Type: document.Source.Type, MediaType: document.Source.MediaType, Data: document.Source.Data, URL: document.Source.URL}
+			}
+			parts = append(parts, WebFetchResult{Type: block.Type, URL: block.URL, RetrievedAt: block.RetrievedAt, Content: DocumentContent{Source: source}})
 		case "web_search_error":
 			parts = append(parts, WebSearchError{Type: block.Type, ErrorCode: block.ErrorCode})
 		case "web_search_result":
@@ -799,6 +807,8 @@ func parseToolResultParts(value any) []ToolResultPart {
 			parts = append(parts, AdvisorResult{Type: block.Type, Text: block.Text})
 		case "advisor_redacted_result":
 			parts = append(parts, AdvisorRedactedResult{Type: block.Type, EncryptedContent: block.EncryptedContent})
+		default:
+			parts = append(parts, ToolResultUnknown{Type: block.Type, Raw: block.Raw})
 		}
 	}
 	return parts

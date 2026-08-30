@@ -68,6 +68,7 @@ func (AssistantMessage) IsMessage() {}
 type TextContent struct {
 	Text      string
 	Citations []Citation
+	Raw       map[string]json.RawMessage
 }
 
 func (TextContent) IsUserContent()      {}
@@ -124,6 +125,8 @@ type ToolCallContent struct {
 	ProviderExecuted bool
 	Dynamic          bool
 	ProviderMetadata ProviderMetadata
+	Caller           *ToolCallCallerInfo
+	Raw              map[string]json.RawMessage
 }
 
 func (ToolCallContent) IsAssistantContent() {}
@@ -135,10 +138,14 @@ type ServerToolUseContent struct {
 	Name             string
 	Input            json.RawMessage
 	ProviderMetadata ProviderMetadata
+	Caller           *ToolCallCallerInfo
+	Dynamic          bool
+	Raw              map[string]json.RawMessage
 }
 
 func (ServerToolUseContent) IsAssistantContent() {}
 func (ServerToolUseContent) IsResponseContent()  {}
+func (ServerToolUseContent) IsContent()          {}
 
 type MCPToolUseContent struct {
 	ID               string
@@ -146,24 +153,39 @@ type MCPToolUseContent struct {
 	ServerName       string
 	Input            json.RawMessage
 	ProviderMetadata ProviderMetadata
+	Dynamic          bool
+	Raw              map[string]json.RawMessage
 }
 
 func (MCPToolUseContent) IsAssistantContent() {}
 func (MCPToolUseContent) IsResponseContent()  {}
+func (MCPToolUseContent) IsContent()          {}
 
 type ToolResultContent struct {
+	Type             string
 	ToolCallID       string
 	Result           []ToolResultPart
 	IsError          bool
 	ProviderExecuted bool
 	Dynamic          bool
 	ProviderMetadata ProviderMetadata
+	Caller           *ToolCallCallerInfo
+	Raw              map[string]json.RawMessage
+	RawContent       json.RawMessage
 }
 
-func (ToolResultContent) IsUserContent() {}
-func (ToolResultContent) IsContent()     {}
+func (ToolResultContent) IsUserContent()      {}
+func (ToolResultContent) IsAssistantContent() {}
+func (ToolResultContent) IsContent()          {}
 
 type ToolResultPart interface{ IsToolResultPart() }
+
+type ToolResultUnknown struct {
+	Type string
+	Raw  map[string]json.RawMessage
+}
+
+func (ToolResultUnknown) IsToolResultPart() {}
 
 type ToolResultText struct{ Text string }
 
@@ -675,6 +697,40 @@ type Metadata struct {
 	UserID string `json:"user_id,omitempty"`
 }
 type ToolCallCaller string
+
+type ToolCallCallerInfo struct {
+	Type   string                     `json:"type"`
+	ToolID string                     `json:"tool_id,omitempty"`
+	Raw    map[string]json.RawMessage `json:"-"`
+}
+
+func (c ToolCallCallerInfo) MarshalJSON() ([]byte, error) {
+	type plain ToolCallCallerInfo
+	typed, err := json.Marshal(plain(c))
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(typed, &out); err != nil {
+		return nil, err
+	}
+	for key, value := range c.Raw {
+		if key != "type" && key != "tool_id" {
+			out[key] = value
+		}
+	}
+	return json.Marshal(out)
+}
+
+func (c *ToolCallCallerInfo) UnmarshalJSON(data []byte) error {
+	type plain ToolCallCallerInfo
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = ToolCallCallerInfo(decoded)
+	return json.Unmarshal(data, &c.Raw)
+}
 
 type CitationsConfig struct {
 	Enabled bool `json:"enabled"`

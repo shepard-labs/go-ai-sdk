@@ -281,7 +281,7 @@ func TestPromptConvertToolResultsAndAssistantToolCalls(t *testing.T) {
 		MCPToolUseContent{ID: "mcp", Name: "tool", ServerName: "server", Input: json.RawMessage(`{"a":1}`)},
 	}}})
 	blocks := assistantMessages[0].Content
-	if blocks[0].Type != "tool_use" || blocks[0].Name != "weather" || blocks[1].Type != "server_tool_use" || blocks[2].Type != "mcp_tool_use" || blocks[2].ServerName != "server" {
+	if blocks[0].Type != "server_tool_use" || blocks[1].Type != "mcp_tool_use" || blocks[1].ServerName != "server" || blocks[2].Type != "tool_use" || blocks[2].Name != "weather" {
 		t.Fatalf("blocks = %#v", blocks)
 	}
 }
@@ -536,9 +536,9 @@ func TestResponseParseToolCallsAndResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := result.Content[0].(ToolCallContent)
-	server := result.Content[1].(ToolCallContent)
+	server := result.Content[1].(ServerToolUseContent)
 	toolResult := result.Content[2].(ToolResultContent)
-	if result.FinishReason != FinishReasonToolCalls || call.Type != "tool-call" || !call.Dynamic || call.ProviderMetadata["a"].(float64) != 1 || server.Type != "server-tool-call" || !server.ProviderExecuted || !toolResult.IsError || !toolResult.ProviderExecuted || toolResult.Result[0].(ToolResultText).Text != "done" {
+	if result.FinishReason != FinishReasonToolCalls || call.Type != "tool-call" || !call.Dynamic || server.ID != "server" || server.Name != "web_search" || string(server.Input) != `{"query":"x"}` || toolResult.Type != "mcp_tool_result" || toolResult.ToolCallID != "mcp" || !toolResult.IsError || !toolResult.ProviderExecuted || toolResult.Result[0].(ToolResultText).Text != "done" {
 		t.Fatalf("result = %#v", result)
 	}
 }
