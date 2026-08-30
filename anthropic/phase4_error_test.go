@@ -240,7 +240,7 @@ func TestPhase4HTTPSetupErrorPreservesResponseMetadataAndPartialBody(t *testing.
 	resp := &http.Response{StatusCode: 503, Header: http.Header{"X-Request-Id": []string{"req-1"}}, Body: io.NopCloser(&bytesThenErrorReader{data: []byte(`{"error":{"type":"api_error","message":"partial"}}`), err: cause})}
 	body, truncated, readErr := readLimited(resp.Body, 32)
 	var apiErr *APICallError
-	if !errors.As(apiCallError(resp, body, truncated, readErr), &apiErr) {
+	if !errors.As(apiCallError(resp, body, truncated, readErr, true), &apiErr) {
 		t.Fatal("want APICallError")
 	}
 	if apiErr.Status != 503 || apiErr.SyntheticStatus || apiErr.RequestID != "req-1" || apiErr.Headers.Get("X-Request-Id") != "req-1" || !errors.Is(apiErr, cause) || len(apiErr.Body) != 32 || !apiErr.Truncated {

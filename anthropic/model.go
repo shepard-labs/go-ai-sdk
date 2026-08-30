@@ -50,7 +50,10 @@ func (m *anthropicLanguageModel) DoGenerate(ctx context.Context, opts GenerateOp
 		return nil, err
 	}
 	if resp == nil {
-		return nil, &APICallError{Message: "fetcher returned nil response and nil error", Retryable: true}
+		return nil, &APICallError{Message: "fetcher returned nil response and nil error", Retryable: replaySafe}
+	}
+	if resp.Body == nil {
+		return nil, nilResponseBodyError(resp, replaySafe)
 	}
 	defer resp.Body.Close()
 	limit := m.provider.maxResponseBodyBytes
@@ -58,13 +61,22 @@ func (m *anthropicLanguageModel) DoGenerate(ctx context.Context, opts GenerateOp
 		limit = m.provider.maxErrorResponseBytes
 	}
 	respBody, truncated, err := readLimited(resp.Body, limit)
-	if err != nil {
-		return nil, err
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err := apiCallError(resp, respBody, truncated, nil)
-		m.provider.logger.Error("anthropic generate API error", "model", m.modelID, "status", resp.StatusCode, "error", err)
-		return nil, err
+		apiErr := apiCallError(resp, respBody, truncated, err, replaySafe)
+		m.provider.logger.Error("anthropic generate API error", "model", m.modelID, "status", resp.StatusCode, "error", apiErr)
+		return nil, apiErr
+	}
+	if err != nil {
+		return nil, &APICallError{
+			Message:   "failed to read successful response body",
+			Status:    resp.StatusCode,
+			Headers:   cloneHeader(resp.Header),
+			RequestID: responseRequestID(resp.Header),
+			Body:      append([]byte(nil), respBody...),
+			Truncated: truncated || int64(len(respBody)) >= limit,
+			Retryable: retryableIncompleteResponse(resp.StatusCode, replaySafe),
+			Cause:     err,
+		}
 	}
 	if truncated {
 		return nil, &APICallError{Message: "response body exceeded configured limit", Status: resp.StatusCode, Headers: cloneHeader(resp.Header), RequestID: responseRequestID(resp.Header), Body: respBody, Truncated: true, Retryable: false}
@@ -99,13 +111,17 @@ func (m *anthropicLanguageModel) DoStream(ctx context.Context, opts StreamOption
 	}
 	if resp == nil {
 		cancel()
-		return nil, &APICallError{Message: "fetcher returned nil response and nil error", Retryable: true}
+		return nil, &APICallError{Message: "fetcher returned nil response and nil error", Retryable: replaySafe}
+	}
+	if resp.Body == nil {
+		cancel()
+		return nil, nilResponseBodyError(resp, replaySafe)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer cancel()
 		defer resp.Body.Close()
 		respBody, truncated, readErr := readLimited(resp.Body, m.provider.maxErrorResponseBytes)
-		err := apiCallError(resp, respBody, truncated, readErr)
+		err := apiCallError(resp, respBody, truncated, readErr, replaySafe)
 		m.provider.logger.Error("anthropic stream API error", "model", m.modelID, "status", resp.StatusCode, "error", err)
 		return nil, err
 	}
@@ -1008,7 +1024,7 @@ func readLimited(reader io.Reader, limit int64) ([]byte, bool, error) {
 	return body, false, nil
 }
 
-func apiCallError(resp *http.Response, body []byte, truncated bool, cause error) error {
+func apiCallError(resp *http.Response, body []byte, truncated bool, cause error, replaySafe bool) error {
 	status := 0
 	headers := http.Header(nil)
 	requestID := ""
@@ -1031,7 +1047,21 @@ func apiCallError(resp *http.Response, body []byte, truncated bool, cause error)
 	} else if truncated {
 		message = "response body exceeded configured limit"
 	}
-	return &APICallError{Status: status, Message: message, Type: errorType, Retryable: status == http.StatusTooManyRequests || status >= 500, Headers: headers, RequestID: requestID, Body: body, Truncated: truncated, Cause: cause}
+	return &APICallError{Status: status, Message: message, Type: errorType, Retryable: replaySafe && (status == http.StatusTooManyRequests || status >= 500), Headers: headers, RequestID: requestID, Body: body, Truncated: truncated, Cause: cause}
+}
+
+func nilResponseBodyError(resp *http.Response, replaySafe bool) error {
+	return &APICallError{
+		Status:    resp.StatusCode,
+		Message:   "HTTP response has nil body",
+		Retryable: retryableIncompleteResponse(resp.StatusCode, replaySafe),
+		Headers:   cloneHeader(resp.Header),
+		RequestID: responseRequestID(resp.Header),
+	}
+}
+
+func retryableIncompleteResponse(status int, replaySafe bool) bool {
+	return replaySafe && ((status >= 200 && status < 300) || status == http.StatusTooManyRequests || status >= 500)
 }
 
 func cloneHeader(header http.Header) http.Header {
