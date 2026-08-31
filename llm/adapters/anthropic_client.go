@@ -27,6 +27,12 @@ const (
 	AnthropicModelClaudeSonnet46 = anthropicsdk.ModelClaudeSonnet46
 	// AnthropicModelClaudeOpus48 is the Claude Opus model identifier.
 	AnthropicModelClaudeOpus48 = anthropicsdk.ModelClaudeOpus48
+	// AnthropicModelClaudeFable5 is the Claude Fable model identifier.
+	AnthropicModelClaudeFable5 = anthropicsdk.ModelClaudeFable5
+	// AnthropicModelClaudeSonnet5 is the Claude Sonnet 5 model identifier.
+	AnthropicModelClaudeSonnet5 = anthropicsdk.ModelClaudeSonnet5
+	// AnthropicModelClaudeOpus5 is the Claude Opus 5 model identifier.
+	AnthropicModelClaudeOpus5 = anthropicsdk.ModelClaudeOpus5
 )
 
 // NewAnthropicAdapter wraps an existing Anthropic language model as a Client.

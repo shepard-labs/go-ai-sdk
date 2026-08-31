@@ -16,6 +16,8 @@ const (
 	ModelClaudeSonnet46 ModelID = "claude-sonnet-4-6"
 	ModelClaudeOpus48   ModelID = "claude-opus-4-8"
 	ModelClaudeFable5   ModelID = "claude-fable-5"
+	ModelClaudeSonnet5  ModelID = "claude-sonnet-5"
+	ModelClaudeOpus5    ModelID = "claude-opus-5"
 )
 
 type ModelCapabilities struct {
