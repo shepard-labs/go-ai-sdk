@@ -3,6 +3,7 @@ package openaicompatible
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 )
@@ -57,6 +58,11 @@ type chatStreamToolState struct {
 	Args       strings.Builder
 	Finished   bool
 	ThoughtSig *string
+	// Index is the wire tool-call index this slot belongs to; split
+	// slots (index reused for a new id) share their parent's Index.
+	Index int
+	// Seq is the creation sequence, tie-breaking slots that share Index.
+	Seq int
 }
 
 func (m *openAICompatibleChatLanguageModel) DoStream(ctx context.Context, opts StreamOptions) (*StreamResult, error) {
@@ -215,6 +221,9 @@ type chatStreamState struct {
 	metadataSent    bool
 	toolCalls       map[int]*chatStreamToolState
 	toolCallCount   int
+	toolSeqNext     int
+	latestToolIndex int
+	hasLatestTool   bool
 	providerOptions ProviderOptions
 	usageShape      *chatUsageShape
 	metadataKey     string
@@ -243,6 +252,25 @@ func (s *chatStreamState) buildMetadata(name string, extractor MetadataExtractor
 	return metadata
 }
 
+// sortedToolKeys returns tool slots in deterministic emission order:
+// numeric wire index first, creation sequence breaking ties between a
+// slot and its index-reuse splits. Map iteration order is random, so
+// flushing must never range s.toolCalls directly.
+func (s *chatStreamState) sortedToolKeys() []int {
+	keys := make([]int, 0, len(s.toolCalls))
+	for k := range s.toolCalls {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := s.toolCalls[keys[i]], s.toolCalls[keys[j]]
+		if a.Index != b.Index {
+			return a.Index < b.Index
+		}
+		return a.Seq < b.Seq
+	})
+	return keys
+}
+
 func (s *chatStreamState) flushStreamState(parts chan<- StreamPart) {
 	if s.reasoningActive {
 		parts <- StreamReasoningEnd{ID: "reasoning-0"}
@@ -252,11 +280,20 @@ func (s *chatStreamState) flushStreamState(parts chan<- StreamPart) {
 		parts <- StreamTextEnd{ID: "txt-0"}
 		s.textStarted = false
 	}
-	for _, tool := range s.toolCalls {
-		if !tool.Finished {
-			inputJSON := tool.Args.String()
-			if !json.Valid([]byte(inputJSON)) {
-				inputJSON = "{}"
+	for _, k := range s.sortedToolKeys() {
+		tool := s.toolCalls[k]
+		if tool.Finished {
+			continue
+		}
+		tool.Finished = true
+		parts <- StreamToolInputStart{ID: tool.ID, ToolName: tool.Name}
+		input := tool.Args.String()
+		if input == "" || json.Valid([]byte(input)) {
+			if input == "" {
+				input = "{}"
+			}
+			if tool.Args.Len() > 0 {
+				parts <- StreamToolInputDelta{ID: tool.ID, Delta: tool.Args.String()}
 			}
 			parts <- StreamToolInputEnd{ID: tool.ID}
 			toolMetadata := ProviderMetadata(nil)
@@ -266,10 +303,16 @@ func (s *chatStreamState) flushStreamState(parts chan<- StreamPart) {
 			parts <- StreamToolCall{ToolCallContent: ToolCallContent{
 				ToolCallID:       tool.ID,
 				ToolName:         tool.Name,
-				Input:            json.RawMessage(inputJSON),
+				Input:            json.RawMessage(input),
 				ProviderMetadata: toolMetadata,
 			}}
+			continue
 		}
+		// The accumulation never became valid JSON (truncated input or
+		// trailing garbage): surface an error instead of executing it.
+		parts <- StreamToolInputEnd{ID: tool.ID}
+		parts <- StreamError{Err: InvalidResponseDataError{Message: "Invalid tool call arguments JSON.", Data: input}}
+		s.finishReason = errorFinishReason()
 	}
 }
 
@@ -307,7 +350,11 @@ func (m *openAICompatibleChatLanguageModel) processChatStreamDelta(parts chan<- 
 	}
 
 	for _, tc := range delta.ToolCalls {
-		index := state.resolveToolCallIndex(tc.Index)
+		var id string
+		if tc.ID != nil {
+			id = *tc.ID
+		}
+		index := state.resolveToolCallIndex(tc.Index, id)
 		tool, exists := state.toolCalls[index]
 		if !exists {
 			if tc.ID == nil || *tc.ID == "" {
@@ -322,7 +369,12 @@ func (m *openAICompatibleChatLanguageModel) processChatStreamDelta(parts chan<- 
 			}
 			toolID := *tc.ID
 			toolName := *tc.Function.Name
-			state.toolCalls[index] = &chatStreamToolState{ID: toolID, Name: toolName}
+			wireIndex := index
+			if tc.Index != nil {
+				wireIndex = *tc.Index
+			}
+			state.toolCalls[index] = &chatStreamToolState{ID: toolID, Name: toolName, Index: wireIndex, Seq: state.toolSeqNext}
+			state.toolSeqNext++
 			tool = state.toolCalls[index]
 			if tc.ExtraContent.Google.ThoughtSignature != nil {
 				sig := *tc.ExtraContent.Google.ThoughtSignature
@@ -331,57 +383,50 @@ func (m *openAICompatibleChatLanguageModel) processChatStreamDelta(parts chan<- 
 			if tc.Function.Arguments != nil {
 				tool.Args.WriteString(*tc.Function.Arguments)
 			}
-			parts <- StreamToolInputStart{ID: toolID, ToolName: toolName}
-			if tool.Args.Len() > 0 {
-				parts <- StreamToolInputDelta{ID: toolID, Delta: tool.Args.String()}
-			}
-			if json.Valid([]byte(tool.Args.String())) {
-				maybeEmitToolCall(parts, state, tool)
-			}
-			continue
-		}
-		if tool.Finished {
+			// Buffer only: a prefix that parses as JSON today may still
+			// be followed by more fragments (or garbage), so the
+			// ToolCall is finalized only at flush. Emitting mid-stream
+			// would execute a truncated input while later fragments
+			// are dropped.
 			continue
 		}
 		if tc.Function.Arguments != nil {
 			tool.Args.WriteString(*tc.Function.Arguments)
 		}
-		deltaText := ""
-		if tc.Function.Arguments != nil {
-			deltaText = *tc.Function.Arguments
-		}
-		parts <- StreamToolInputDelta{ID: tool.ID, Delta: deltaText}
-		if json.Valid([]byte(tool.Args.String())) {
-			maybeEmitToolCall(parts, state, tool)
-		}
 	}
 }
 
-func maybeEmitToolCall(parts chan<- StreamPart, state *chatStreamState, tool *chatStreamToolState) {
-	inputJSON := tool.Args.String()
-	if inputJSON == "" {
-		inputJSON = "{}"
-	}
-	parts <- StreamToolInputEnd{ID: tool.ID}
-	toolMetadata := ProviderMetadata(nil)
-	if tool.ThoughtSig != nil {
-		toolMetadata = ProviderMetadata{state.metadataKey: map[string]any{"thoughtSignature": *tool.ThoughtSig}}
-	}
-	parts <- StreamToolCall{ToolCallContent: ToolCallContent{
-		ToolCallID:       tool.ID,
-		ToolName:         tool.Name,
-		Input:            json.RawMessage(inputJSON),
-		ProviderMetadata: toolMetadata,
-	}}
-	tool.Finished = true
-}
-
-func (s *chatStreamState) resolveToolCallIndex(index *int) int {
+func (s *chatStreamState) resolveToolCallIndex(index *int, id string) int {
 	if index != nil {
+		if tool, ok := s.toolCalls[*index]; ok && id != "" && tool.ID != "" && tool.ID != id {
+			// The index was reused for a different tool call id
+			// (provider fallback): split into a fresh slot instead of
+			// merging into the existing tool's arguments.
+			slot := s.toolCallCount
+			for {
+				if _, taken := s.toolCalls[slot]; !taken {
+					break
+				}
+				slot++
+			}
+			s.toolCallCount = slot + 1
+			s.latestToolIndex = slot
+			s.hasLatestTool = true
+			return slot
+		}
+		s.latestToolIndex = *index
+		s.hasLatestTool = true
 		return *index
+	}
+	// A missing index sticks to the latest open slot (provider
+	// fallback that omits per-fragment indices).
+	if s.hasLatestTool {
+		return s.latestToolIndex
 	}
 	current := s.toolCallCount
 	s.toolCallCount++
+	s.latestToolIndex = current
+	s.hasLatestTool = true
 	return current
 }
 

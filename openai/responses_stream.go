@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +60,214 @@ func newResponsesStreamState() *responsesStreamState {
 	}
 }
 
+// responsesAccumKey returns the canonical map key for a Responses stream
+// accumulator: the output_index when present, otherwise the item id (or
+// the fallback when both are absent).
+func responsesAccumKey(outputIndex *int, itemID, fallback string) string {
+	if outputIndex != nil {
+		return "index:" + strconv.Itoa(*outputIndex)
+	}
+	if itemID != "" {
+		return "id:" + itemID
+	}
+	return "id:" + fallback
+}
+
+// responsesAccumRotated reports whether an accumulator stored under an
+// output_index key now faces an event for a different item id: the index
+// was reused and the old accumulator must be closed first.
+func responsesAccumRotated(storedID, eventID string) bool {
+	return storedID != "" && eventID != "" && storedID != eventID
+}
+
+// responsesDisplayID returns the id to surface in stream parts, falling
+// back when the accumulator never learned its item id.
+func responsesDisplayID(storedID, fallback string) string {
+	if storedID != "" {
+		return storedID
+	}
+	return fallback
+}
+
+// lookupResponsesTextAccum finds the text accumulator for an event by its
+// canonical key, falling back to an item-id scan for events that omit
+// output_index. It returns the key to store under on a miss.
+func lookupResponsesTextAccum(state *responsesStreamState, outputIndex *int, itemID, fallback string) (string, *responsesTextAccum, bool) {
+	key := responsesAccumKey(outputIndex, itemID, fallback)
+	if acc, ok := state.text[key]; ok {
+		return key, acc, true
+	}
+	if itemID != "" {
+		for k, acc := range state.text {
+			if acc.id == itemID {
+				return k, acc, true
+			}
+		}
+	}
+	return key, nil, false
+}
+
+// lookupResponsesToolAccum finds the tool accumulator for an event by its
+// canonical key, falling back to an item-id scan for events that omit
+// output_index. It returns the key to store under on a miss.
+func lookupResponsesToolAccum(state *responsesStreamState, outputIndex *int, itemID string) (string, *responsesToolAccum, bool) {
+	key := responsesAccumKey(outputIndex, itemID, "")
+	if acc, ok := state.tools[key]; ok {
+		return key, acc, true
+	}
+	if itemID != "" {
+		for k, acc := range state.tools {
+			if acc.id == itemID {
+				return k, acc, true
+			}
+		}
+	}
+	return key, nil, false
+}
+
+// lookupResponsesReasoningAccum finds the reasoning accumulator for an
+// event by its canonical key, falling back to an item-id scan for events
+// that omit output_index. It returns the key to store under on a miss.
+func lookupResponsesReasoningAccum(state *responsesStreamState, outputIndex *int, itemID, fallback string) (string, *responsesReasonAccum, bool) {
+	key := responsesAccumKey(outputIndex, itemID, fallback)
+	if acc, ok := state.reasoning[key]; ok {
+		return key, acc, true
+	}
+	if itemID != "" {
+		for k, acc := range state.reasoning {
+			if acc.id == itemID {
+				return k, acc, true
+			}
+		}
+	}
+	return key, nil, false
+}
+
+// textAccumForDelta returns the text accumulator for a delta event,
+// closing and replacing it first when the output_index was reused with a
+// new item id.
+func textAccumForDelta(parts chan<- StreamPart, state *responsesStreamState, event responsesStreamEvent) *responsesTextAccum {
+	key, acc, ok := lookupResponsesTextAccum(state, event.OutputIndex, event.ItemID, "txt-0")
+	if ok && responsesAccumRotated(acc.id, event.ItemID) {
+		closeResponsesTextAccum(parts, state, key)
+		ok = false
+	}
+	if ok {
+		if acc.id == "" && event.ItemID != "" {
+			acc.id = event.ItemID
+		}
+		return acc
+	}
+	acc = &responsesTextAccum{id: event.ItemID}
+	state.text[key] = acc
+	return acc
+}
+
+// toolAccumForDelta returns the tool accumulator for a delta event,
+// closing and replacing it first when the output_index was reused with a
+// new item id. defaultName applies when the event carries no name.
+func toolAccumForDelta(parts chan<- StreamPart, state *responsesStreamState, event responsesStreamEvent, defaultName string) *responsesToolAccum {
+	key, acc, ok := lookupResponsesToolAccum(state, event.OutputIndex, event.ItemID)
+	if ok && responsesAccumRotated(acc.id, event.ItemID) {
+		closeResponsesToolAccum(parts, state, key, nil)
+		ok = false
+	}
+	if ok {
+		if acc.id == "" && event.ItemID != "" {
+			acc.id = event.ItemID
+		}
+		return acc
+	}
+	name := event.Name
+	if name == "" {
+		name = defaultName
+	}
+	acc = &responsesToolAccum{id: event.ItemID, toolName: name}
+	state.tools[key] = acc
+	return acc
+}
+
+// reasoningAccumForDelta returns the reasoning accumulator for a delta
+// event, closing and replacing it first when the output_index was reused
+// with a new item id.
+func reasoningAccumForDelta(parts chan<- StreamPart, state *responsesStreamState, event responsesStreamEvent) *responsesReasonAccum {
+	key, acc, ok := lookupResponsesReasoningAccum(state, event.OutputIndex, event.ItemID, "reasoning-0")
+	if ok && responsesAccumRotated(acc.id, event.ItemID) {
+		closeResponsesReasoningAccum(parts, state, key)
+		ok = false
+	}
+	if ok {
+		if acc.id == "" && event.ItemID != "" {
+			acc.id = event.ItemID
+		}
+		return acc
+	}
+	acc = &responsesReasonAccum{id: event.ItemID, active: true}
+	state.reasoning[key] = acc
+	return acc
+}
+
+// closeResponsesTextAccum emits the end part for a text accumulator and
+// removes it. It is a no-op when the key holds nothing.
+func closeResponsesTextAccum(parts chan<- StreamPart, state *responsesStreamState, key string) {
+	acc, ok := state.text[key]
+	if !ok {
+		return
+	}
+	delete(state.text, key)
+	endPM := ProviderMetadata{}
+	if len(acc.annotations) > 0 {
+		endPM["openai"] = map[string]any{"annotations": acc.annotations}
+	}
+	parts <- StreamTextEnd{ID: responsesDisplayID(acc.id, "txt-0"), ProviderMetadata: endPM}
+}
+
+// closeResponsesToolAccum finalizes a tool accumulator (input end plus
+// tool call, coercing invalid input to "{}") and removes it. It is a
+// no-op when the key holds nothing.
+func closeResponsesToolAccum(parts chan<- StreamPart, state *responsesStreamState, key string, extraPM ProviderMetadata) {
+	acc, ok := state.tools[key]
+	if !ok {
+		return
+	}
+	delete(state.tools, key)
+	input := acc.input.String()
+	if !json.Valid([]byte(input)) {
+		input = "{}"
+	}
+	parts <- StreamToolInputEnd{ID: acc.id}
+	parts <- StreamToolCall{ToolCallContent: ToolCallContent{
+		ToolCallContentEmbed: ToolCallContentEmbed{
+			ToolCallID:       acc.id,
+			ToolName:         acc.toolName,
+			Input:            json.RawMessage(input),
+			ProviderMetadata: extraPM,
+		},
+	}}
+}
+
+// closeResponsesReasoningAccum emits the end part for a reasoning
+// accumulator and removes it. It is a no-op when the key holds nothing.
+func closeResponsesReasoningAccum(parts chan<- StreamPart, state *responsesStreamState, key string) {
+	acc, ok := state.reasoning[key]
+	if !ok {
+		return
+	}
+	delete(state.reasoning, key)
+	endPM := ProviderMetadata{}
+	om := map[string]any{}
+	if acc.id != "" {
+		om["itemId"] = acc.id
+	}
+	if acc.encrypted != "" {
+		om["reasoningEncryptedContent"] = acc.encrypted
+	}
+	if len(om) > 0 {
+		endPM["openai"] = om
+	}
+	parts <- StreamReasoningEnd{ID: responsesDisplayID(acc.id, "reasoning-0"), ProviderMetadata: endPM}
+}
+
 // runResponsesStream drives a Responses API SSE stream, translating events
 // into StreamPart messages.
 func (m *openaiResponsesModel) runResponsesStream(
@@ -91,6 +300,7 @@ func (m *openaiResponsesModel) runResponsesStream(
 			state.finishReason = errorFinishReason()
 			return false
 		}
+		event.Raw = string(raw)
 		m.processResponsesEvent(parts, sresp, state, event)
 		return true
 	})
@@ -100,7 +310,7 @@ func (m *openaiResponsesModel) runResponsesStream(
 		if len(acc.annotations) > 0 {
 			endPM["openai"] = map[string]any{"annotations": acc.annotations}
 		}
-		parts <- StreamTextEnd{ID: acc.id, ProviderMetadata: endPM}
+		parts <- StreamTextEnd{ID: responsesDisplayID(acc.id, "txt-0"), ProviderMetadata: endPM}
 	}
 	for _, acc := range state.tools {
 		input := acc.input.String()
@@ -128,7 +338,7 @@ func (m *openaiResponsesModel) runResponsesStream(
 		if len(om) > 0 {
 			endPM["openai"] = om
 		}
-		parts <- StreamReasoningEnd{ID: acc.id, ProviderMetadata: endPM}
+		parts <- StreamReasoningEnd{ID: responsesDisplayID(acc.id, "reasoning-0"), ProviderMetadata: endPM}
 	}
 	finalUsage := Usage{}
 	if state.usage != nil {
@@ -168,6 +378,10 @@ type responsesStreamEvent struct {
 	Queries      []any                 `json:"queries"`
 	Results      []any                 `json:"results"`
 	Error        *chatStreamErrorShape `json:"error"`
+	// Raw carries the original SSE payload for error reporting. It is
+	// populated by runResponsesStream after unmarshalling and is never
+	// part of the wire format.
+	Raw string `json:"-"`
 }
 
 type responsesStreamResp struct {
@@ -203,29 +417,13 @@ func (m *openaiResponsesModel) processResponsesEvent(parts chan<- StreamPart, sr
 	case "response.output_item.done":
 		handleResponsesItemDone(parts, state, event)
 	case "response.output_text.delta":
-		id := event.ItemID
-		if id == "" {
-			id = "txt-0"
-		}
-		acc, ok := state.text[id]
-		if !ok {
-			acc = &responsesTextAccum{id: id}
-			state.text[id] = acc
-		}
+		acc := textAccumForDelta(parts, state, event)
 		acc.text.WriteString(event.Delta)
-		parts <- StreamTextDelta{ID: id, Text: event.Delta}
+		parts <- StreamTextDelta{ID: responsesDisplayID(acc.id, "txt-0"), Text: event.Delta}
 	case "response.reasoning_summary_text.delta":
-		id := event.ItemID
-		if id == "" {
-			id = "reasoning-0"
-		}
-		acc, ok := state.reasoning[id]
-		if !ok {
-			acc = &responsesReasonAccum{id: id, active: true}
-			state.reasoning[id] = acc
-		}
+		acc := reasoningAccumForDelta(parts, state, event)
 		acc.text.WriteString(event.Delta)
-		parts <- StreamReasoningDelta{ID: id, Text: event.Delta}
+		parts <- StreamReasoningDelta{ID: responsesDisplayID(acc.id, "reasoning-0"), Text: event.Delta}
 	case "response.reasoning_summary_part.added":
 		// A new reasoning summary part is starting (only seen for
 		// multi-part summaries). If the index is > 0, any earlier
@@ -241,15 +439,8 @@ func (m *openaiResponsesModel) processResponsesEvent(parts chan<- StreamPart, sr
 		//     reasoning-end providerMetadata).
 		//   store=nil (default): conclude immediately to match server
 		//     default of store=true.
-		id := event.ItemID
-		if id == "" {
-			id = "reasoning-0"
-		}
-		acc, ok := state.reasoning[id]
-		if !ok {
-			acc = &responsesReasonAccum{id: id, active: true}
-			state.reasoning[id] = acc
-		}
+		acc := reasoningAccumForDelta(parts, state, event)
+		id := responsesDisplayID(acc.id, "reasoning-0")
 		concludeImmediately := m.store == nil || *m.store
 		if concludeImmediately {
 			acc.active = false
@@ -258,47 +449,32 @@ func (m *openaiResponsesModel) processResponsesEvent(parts chan<- StreamPart, sr
 			acc.canConclude = true
 		}
 	case "response.function_call_arguments.delta":
-		id := event.ItemID
-		acc, ok := state.tools[id]
-		if !ok {
-			acc = &responsesToolAccum{id: id, toolName: event.Name}
-			state.tools[id] = acc
-		}
+		acc := toolAccumForDelta(parts, state, event, "")
 		acc.input.WriteString(event.Delta)
 		// Emit Start lazily so that deltas arriving before the
 		// output_item.added (which carries function.name) are still
 		// surfaced with the correct tool name.
 		if !acc.started && acc.toolName != "" {
-			parts <- StreamToolInputStart{ID: id, ToolName: acc.toolName}
+			parts <- StreamToolInputStart{ID: acc.id, ToolName: acc.toolName}
 			acc.started = true
 		}
 		if acc.started {
-			parts <- StreamToolInputDelta{ID: id, Delta: event.Delta}
+			parts <- StreamToolInputDelta{ID: acc.id, Delta: event.Delta}
 		}
 	case "response.custom_tool_call_input.delta":
-		id := event.ItemID
-		acc, ok := state.tools[id]
-		if !ok {
-			acc = &responsesToolAccum{id: id, toolName: event.Name}
-			state.tools[id] = acc
-		}
+		acc := toolAccumForDelta(parts, state, event, "")
 		acc.input.WriteString(event.Delta)
 		if !acc.started && acc.toolName != "" {
-			parts <- StreamToolInputStart{ID: id, ToolName: acc.toolName}
+			parts <- StreamToolInputStart{ID: acc.id, ToolName: acc.toolName}
 			acc.started = true
 		}
 		if acc.started {
-			parts <- StreamToolInputDelta{ID: id, Delta: event.Delta}
+			parts <- StreamToolInputDelta{ID: acc.id, Delta: event.Delta}
 		}
 	case "response.code_interpreter_call_code.delta":
-		id := event.ItemID
-		acc, ok := state.tools[id]
-		if !ok {
-			acc = &responsesToolAccum{id: id, toolName: "code_interpreter"}
-			state.tools[id] = acc
-		}
+		acc := toolAccumForDelta(parts, state, event, "code_interpreter")
 		acc.input.WriteString(event.Delta)
-		parts <- StreamToolInputDelta{ID: id, Delta: event.Delta}
+		parts <- StreamToolInputDelta{ID: acc.id, Delta: event.Delta}
 	case "response.image_generation_call.partial_image":
 		// Per spec: emit a preliminary ToolResultContent-shaped event with
 		// the partial base64 image as Output.Value and preliminary=true in
@@ -323,22 +499,16 @@ func (m *openaiResponsesModel) processResponsesEvent(parts chan<- StreamPart, sr
 		// apply_patch streams its operation as a series of diffs; each
 		// one is emitted as a tool input delta (the upstream SDK
 		// JSON-escapes the diff before emitting).
-		id := event.ItemID
-		acc, ok := state.tools[id]
-		if !ok {
-			acc = &responsesToolAccum{id: id, toolName: "apply_patch"}
-			state.tools[id] = acc
-		}
+		acc := toolAccumForDelta(parts, state, event, "apply_patch")
 		escaped, _ := json.Marshal(event.Delta)
 		_, _ = acc.input.Write([]byte(event.Delta))
-		parts <- StreamToolInputDelta{ID: id, Delta: string(escaped)}
+		parts <- StreamToolInputDelta{ID: acc.id, Delta: string(escaped)}
 	case "response.apply_patch_call_operation_diff.done":
 		// The spec says apply_patch's output_item.done is what normally
 		// closes the tool input, but the diff.done event also signals
 		// completion. Mark the accumulator as ended so the next
 		// output_item.done doesn't emit a duplicate.
-		id := event.ItemID
-		if acc, ok := state.tools[id]; ok {
+		if _, acc, ok := lookupResponsesToolAccum(state, event.OutputIndex, event.ItemID); ok {
 			acc.started = true
 		}
 	case "response.output_text.annotation.added":
@@ -351,16 +521,21 @@ func (m *openaiResponsesModel) processResponsesEvent(parts chan<- StreamPart, sr
 		// StreamTextEnd can carry the full annotations list in
 		// ProviderMetadata["openai"].
 		if event.ItemID != "" {
-			acc, ok := state.text[event.ItemID]
+			key, acc, ok := lookupResponsesTextAccum(state, event.OutputIndex, event.ItemID, "")
 			if !ok {
 				acc = &responsesTextAccum{id: event.ItemID}
-				state.text[event.ItemID] = acc
+				state.text[key] = acc
 			}
 			acc.annotations = append(acc.annotations, event.Annotation)
 		}
 	case "response.completed", "response.incomplete":
 		if event.Response != nil {
-			state.finishReason = responsesStreamFinishReason(event.Response.Status, false)
+			// A latched error finish (unknown event type, stream
+			// error, failure) is never overwritten by a later
+			// completed/stop.
+			if state.finishReason != errorFinishReason() {
+				state.finishReason = responsesStreamFinishReason(event.Response.Status, false)
+			}
 			usage := parseResponsesUsage(event.Response.Usage)
 			state.usage = &usage
 			// Per spec: responseId and serviceTier belong on the
@@ -399,6 +574,15 @@ func (m *openaiResponsesModel) processResponsesEvent(parts chan<- StreamPart, sr
 				Status:  status,
 			}}
 		}
+	default:
+		// Unknown event types must surface instead of being silently
+		// dropped. The stream continues, but the error finish latches:
+		// a later completed/stop must not overwrite it.
+		parts <- StreamError{Err: InvalidResponseDataError{
+			Message: "Unknown event type " + strconv.Quote(event.Type),
+			Data:    event.Raw,
+		}}
+		state.finishReason = errorFinishReason()
 	}
 }
 
@@ -409,6 +593,7 @@ func handleResponsesItemAdded(parts chan<- StreamPart, state *responsesStreamSta
 	}
 	t, _ := event.Item["type"].(string)
 	id, _ := event.Item["id"].(string)
+	key := responsesAccumKey(event.OutputIndex, id, "")
 	switch t {
 	case "compaction":
 		// Compaction items are emitted as a single StreamCustomPart on
@@ -422,7 +607,12 @@ func handleResponsesItemAdded(parts chan<- StreamPart, state *responsesStreamSta
 		return
 	case "message":
 		phase, _ := event.Item["phase"].(string)
-		state.text[id] = &responsesTextAccum{id: id, phase: phase}
+		// A reused output_index with a new item id closes the previous
+		// accumulator before the new one starts.
+		if acc, ok := state.text[key]; ok && responsesAccumRotated(acc.id, id) {
+			closeResponsesTextAccum(parts, state, key)
+		}
+		state.text[key] = &responsesTextAccum{id: id, phase: phase}
 		startPM := ProviderMetadata{}
 		om := map[string]any{}
 		if id != "" {
@@ -437,7 +627,10 @@ func handleResponsesItemAdded(parts chan<- StreamPart, state *responsesStreamSta
 		parts <- StreamTextStart{ID: id, ProviderMetadata: startPM}
 	case "reasoning":
 		encrypted, _ := event.Item["encrypted_content"].(string)
-		state.reasoning[id] = &responsesReasonAccum{id: id, active: true, encrypted: encrypted}
+		if acc, ok := state.reasoning[key]; ok && responsesAccumRotated(acc.id, id) {
+			closeResponsesReasoningAccum(parts, state, key)
+		}
+		state.reasoning[key] = &responsesReasonAccum{id: id, active: true, encrypted: encrypted}
 		startPM := ProviderMetadata{}
 		om := map[string]any{}
 		if id != "" {
@@ -486,15 +679,24 @@ func handleResponsesItemAdded(parts chan<- StreamPart, state *responsesStreamSta
 		// If deltas arrived before the item.added (no name yet), keep
 		// the buffered accumulator; just update the name and emit the
 		// start (plus the buffered deltas).
-		acc, exists := state.tools[id]
+		acc, exists := state.tools[key]
+		if exists && responsesAccumRotated(acc.id, id) {
+			closeResponsesToolAccum(parts, state, key, nil)
+			acc, exists = state.tools[key]
+		}
 		if !exists {
 			acc = &responsesToolAccum{id: id, toolName: toolName}
-			state.tools[id] = acc
-		} else if toolName != "" && (acc.toolName == "" || acc.toolName == t) {
-			acc.toolName = toolName
+			state.tools[key] = acc
+		} else {
+			if acc.id == "" && id != "" {
+				acc.id = id
+			}
+			if toolName != "" && (acc.toolName == "" || acc.toolName == t) {
+				acc.toolName = toolName
+			}
 		}
 		if !acc.started {
-			parts <- StreamToolInputStart{ID: id, ToolName: acc.toolName}
+			parts <- StreamToolInputStart{ID: acc.id, ToolName: acc.toolName}
 			acc.started = true
 		}
 	}
@@ -509,43 +711,50 @@ func handleResponsesItemDone(parts chan<- StreamPart, state *responsesStreamStat
 	id, _ := event.Item["id"].(string)
 	switch t {
 	case "message":
+		// The lookup key is the actual key holding the accumulator
+		// (canonical index key or a scanned item-id match), so a
+		// done without output_index still closes index-keyed state.
+		key, acc, _ := lookupResponsesTextAccum(state, event.OutputIndex, id, "")
 		endPM := ProviderMetadata{}
-		if acc, ok := state.text[id]; ok && len(acc.annotations) > 0 {
+		if acc != nil && len(acc.annotations) > 0 {
 			endPM["openai"] = map[string]any{"annotations": acc.annotations}
 		}
 		parts <- StreamTextEnd{ID: id, ProviderMetadata: endPM}
-		delete(state.text, id)
+		delete(state.text, key)
 	case "function_call", "custom_tool_call", "apply_patch_call", "local_shell_call", "shell_call", "tool_search_call", "web_search_call", "file_search_call", "image_generation_call", "code_interpreter_call":
-		acc, ok := state.tools[id]
+		key, acc, ok := lookupResponsesToolAccum(state, event.OutputIndex, id)
 		if !ok {
 			return
+		}
+		if acc.id == "" {
+			acc.id = id
 		}
 		input := acc.input.String()
 		if !json.Valid([]byte(input)) {
 			input = "{}"
 		}
-		parts <- StreamToolInputEnd{ID: id}
+		parts <- StreamToolInputEnd{ID: acc.id}
 		embed := ToolCallContentEmbed{
-			ToolCallID: id,
+			ToolCallID: acc.id,
 			ToolName:   acc.toolName,
 			Input:      json.RawMessage(input),
 		}
 		// shell_call and apply_patch_call need itemId round-trip.
 		if t == "shell_call" || t == "apply_patch_call" {
 			embed.ProviderMetadata = ProviderMetadata{
-				"openai": map[string]any{"itemId": id},
+				"openai": map[string]any{"itemId": acc.id},
 			}
 		}
 		parts <- StreamToolCall{ToolCallContent: ToolCallContent{
 			ToolCallContentEmbed: embed,
 		}}
-		delete(state.tools, id)
+		delete(state.tools, key)
 	case "reasoning":
 		// Conclude all remaining `active` and `can-conclude` summary
 		// parts (per spec: output_item.done for reasoning flushes the
 		// state).
 		concludeCanConcludeReasoning(parts, state)
-		if acc, ok := state.reasoning[id]; ok {
+		if key, acc, ok := lookupResponsesReasoningAccum(state, event.OutputIndex, id, ""); ok {
 			acc.active = false
 			em := ProviderMetadata{}
 			om := map[string]any{}
@@ -559,8 +768,8 @@ func handleResponsesItemDone(parts chan<- StreamPart, state *responsesStreamStat
 				em["openai"] = om
 			}
 			parts <- StreamReasoningEnd{ID: id, ProviderMetadata: em}
+			delete(state.reasoning, key)
 		}
-		delete(state.reasoning, id)
 	case "mcp_approval_request":
 		delete(state.approvals, id)
 	}
@@ -589,7 +798,7 @@ func responsesStreamFinishReason(status string, hasToolCall bool) FinishReason {
 // resets their state. Used to flush deferred conclusions when a new
 // summary part arrives or when the reasoning output item finishes.
 func concludeCanConcludeReasoning(parts chan<- StreamPart, state *responsesStreamState) {
-	for id, acc := range state.reasoning {
+	for _, acc := range state.reasoning {
 		if acc.canConclude {
 			em := ProviderMetadata{}
 			om := map[string]any{}
@@ -602,7 +811,7 @@ func concludeCanConcludeReasoning(parts chan<- StreamPart, state *responsesStrea
 			if len(om) > 0 {
 				em["openai"] = om
 			}
-			parts <- StreamReasoningEnd{ID: id, ProviderMetadata: em}
+			parts <- StreamReasoningEnd{ID: responsesDisplayID(acc.id, "reasoning-0"), ProviderMetadata: em}
 			acc.active = false
 			acc.canConclude = false
 		}

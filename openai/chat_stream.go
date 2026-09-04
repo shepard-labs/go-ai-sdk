@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -163,7 +164,6 @@ type chatStreamToolState struct {
 	Name       string
 	Args       strings.Builder
 	Started    bool
-	Finished   bool
 	ThoughtSig *string
 }
 
@@ -300,16 +300,10 @@ func (m *openaiChatLanguageModel) processChatStreamDelta(parts chan<- StreamPart
 			if tc.Function.Arguments != nil {
 				tool.Args.WriteString(*tc.Function.Arguments)
 			}
-			parts <- StreamToolInputStart{ID: toolID, ToolName: toolName}
-			if tool.Args.Len() > 0 {
-				parts <- StreamToolInputDelta{ID: toolID, Delta: tool.Args.String()}
-			}
-			if json.Valid([]byte(tool.Args.String())) {
-				emitChatToolCall(parts, tool)
-			}
-			continue
-		}
-		if tool.Finished {
+			// Buffer only: a prefix that parses as JSON today may still be
+			// followed by more fragments (or garbage), so finalization
+			// happens only at flush. Emitting a ToolCall mid-stream would
+			// execute a truncated input while later fragments are dropped.
 			continue
 		}
 		// Tool exists. If name not yet known, hydrate it now.
@@ -319,35 +313,9 @@ func (m *openaiChatLanguageModel) processChatStreamDelta(parts chan<- StreamPart
 				tool.Args.WriteString(pending)
 				delete(state.pendingArgs, index)
 			}
-			if tc.Function.Arguments != nil {
-				tool.Args.WriteString(*tc.Function.Arguments)
-			}
-			parts <- StreamToolInputStart{ID: tool.ID, ToolName: tool.Name}
-			if tool.Args.Len() > 0 {
-				parts <- StreamToolInputDelta{ID: tool.ID, Delta: tool.Args.String()}
-			}
-			if json.Valid([]byte(tool.Args.String())) {
-				emitChatToolCall(parts, tool)
-			}
-			continue
 		}
 		if tc.Function.Arguments != nil {
 			tool.Args.WriteString(*tc.Function.Arguments)
-		}
-		deltaText := ""
-		if tc.Function.Arguments != nil {
-			deltaText = *tc.Function.Arguments
-		}
-		if tool.Started {
-			parts <- StreamToolInputDelta{ID: tool.ID, Delta: deltaText}
-		} else if tool.Name != "" && deltaText != "" {
-			// Late argument with name known but start not yet emitted.
-			parts <- StreamToolInputStart{ID: tool.ID, ToolName: tool.Name}
-			parts <- StreamToolInputDelta{ID: tool.ID, Delta: deltaText}
-			tool.Started = true
-		}
-		if json.Valid([]byte(tool.Args.String())) {
-			emitChatToolCall(parts, tool)
 		}
 	}
 }
@@ -361,26 +329,41 @@ func resolveToolCallIndex(state *chatStreamState, index *int) int {
 	return current
 }
 
-func emitChatToolCall(parts chan<- StreamPart, tool *chatStreamToolState) {
-	inputJSON := tool.Args.String()
-	if inputJSON == "" {
-		inputJSON = "{}"
-	}
+// finalizeChatStreamTool is the single finalization point for streamed
+// tool calls. The buffered arguments are emitted as one input sequence
+// (Start, Delta, End) followed by either the ToolCall, when the
+// accumulation is valid JSON, or a StreamError with an error finish
+// reason, when trailing fragments left it unparsable. Finalizing only
+// here guarantees a truncated or garbage-suffixed input can never
+// execute as a tool call.
+func finalizeChatStreamTool(parts chan<- StreamPart, s *chatStreamState, tool *chatStreamToolState) {
 	if !tool.Started && tool.Name != "" {
 		parts <- StreamToolInputStart{ID: tool.ID, ToolName: tool.Name}
 		tool.Started = true
 	}
-	parts <- StreamToolInputEnd{ID: tool.ID}
-	parts <- StreamToolCall{
-		ToolCallContent: ToolCallContent{
-			ToolCallContentEmbed: ToolCallContentEmbed{
-				ToolCallID: tool.ID,
-				ToolName:   tool.Name,
-				Input:      json.RawMessage(inputJSON),
+	input := tool.Args.String()
+	if input == "" || json.Valid([]byte(input)) {
+		if input == "" {
+			input = "{}"
+		}
+		if tool.Args.Len() > 0 {
+			parts <- StreamToolInputDelta{ID: tool.ID, Delta: tool.Args.String()}
+		}
+		parts <- StreamToolInputEnd{ID: tool.ID}
+		parts <- StreamToolCall{
+			ToolCallContent: ToolCallContent{
+				ToolCallContentEmbed: ToolCallContentEmbed{
+					ToolCallID: tool.ID,
+					ToolName:   tool.Name,
+					Input:      json.RawMessage(input),
+				},
 			},
-		},
+		}
+		return
 	}
-	tool.Finished = true
+	parts <- StreamToolInputEnd{ID: tool.ID}
+	parts <- StreamError{Err: InvalidResponseDataError{Message: "Invalid tool call arguments JSON.", Data: input}}
+	s.finishReason = errorFinishReason()
 }
 
 func (s *chatStreamState) flushChatStreamState(parts chan<- StreamPart) {
@@ -392,23 +375,13 @@ func (s *chatStreamState) flushChatStreamState(parts chan<- StreamPart) {
 		parts <- StreamTextEnd{ID: "txt-0"}
 		s.textStarted = false
 	}
-	for _, tool := range s.toolCalls {
-		if !tool.Finished {
-			inputJSON := tool.Args.String()
-			if !json.Valid([]byte(inputJSON)) {
-				inputJSON = "{}"
-			}
-			parts <- StreamToolInputEnd{ID: tool.ID}
-			parts <- StreamToolCall{
-				ToolCallContent: ToolCallContent{
-					ToolCallContentEmbed: ToolCallContentEmbed{
-						ToolCallID: tool.ID,
-						ToolName:   tool.Name,
-						Input:      json.RawMessage(inputJSON),
-					},
-				},
-			}
-		}
+	keys := make([]int, 0, len(s.toolCalls))
+	for k := range s.toolCalls {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	for _, k := range keys {
+		finalizeChatStreamTool(parts, s, s.toolCalls[k])
 	}
 }
 

@@ -247,24 +247,28 @@ func TestProcessChatStreamDeltaReasoningThenContent(t *testing.T) {
 }
 
 // TestProcessChatStreamDeltaToolCallComplete verifies a complete tool
-// call in one delta emits: StreamToolInputStart, StreamToolInputDelta,
-// StreamToolInputEnd, StreamToolCall.
+// call split across deltas is buffered during delta processing and
+// finalized at flush: StreamToolInputStart, StreamToolInputDelta,
+// StreamToolInputEnd, StreamToolCall, in order.
 func TestProcessChatStreamDeltaToolCallComplete(t *testing.T) {
 	ch, m := newTestStreamParts()
 	state := newChatStreamState()
 	id := "c1"
 	name := "search"
 	args := `{"q":"x"}`
+	idx := 0
 	m.processChatStreamDelta(ch, state, chatStreamDelta{
 		ToolCalls: []chatStreamToolCall{{
 			ID:    &id,
-			Index: nil,
+			Index: &idx,
 			Function: chatStreamFunction{
 				Name:      &name,
 				Arguments: &args,
 			},
 		}},
 	})
+	// Delta processing buffers only; nothing tool-related is emitted yet.
+	state.flushChatStreamState(ch)
 	close(ch)
 	parts := drainParts(ch)
 
@@ -281,8 +285,8 @@ func TestProcessChatStreamDeltaToolCallComplete(t *testing.T) {
 			types = append(types, "call")
 		}
 	}
-	if len(types) < 3 {
-		t.Errorf("expected at least start/end/call, got %v", types)
+	if strings.Join(types, ",") != "start,delta,end,call" {
+		t.Errorf("sequence: %v, want start,delta,end,call", types)
 	}
 }
 
@@ -380,7 +384,7 @@ func TestFlushChatStreamStateTextStarted(t *testing.T) {
 func TestFlushChatStreamStateUnfinishedTool(t *testing.T) {
 	ch := make(chan StreamPart, 16)
 	state := newChatStreamState()
-	state.toolCalls[0] = &chatStreamToolState{ID: "c1", Name: "f", Started: true, Finished: false}
+	state.toolCalls[0] = &chatStreamToolState{ID: "c1", Name: "f", Started: true}
 	state.flushChatStreamState(ch)
 	close(ch)
 	parts := drainParts(ch)
@@ -399,29 +403,44 @@ func TestFlushChatStreamStateUnfinishedTool(t *testing.T) {
 }
 
 // TestFlushChatStreamStateUnfinishedToolInvalidJSON verifies that
-// invalid buffered args fall back to "{}".
+// invalid buffered args produce no ToolCall: the input is closed out
+// with a StreamError and an error finish reason instead of executing.
 func TestFlushChatStreamStateUnfinishedToolInvalidJSON(t *testing.T) {
 	ch := make(chan StreamPart, 16)
 	state := newChatStreamState()
-	tool := &chatStreamToolState{ID: "c1", Name: "f", Started: true, Finished: false}
+	tool := &chatStreamToolState{ID: "c1", Name: "f", Started: true}
 	tool.Args.WriteString("not-json")
 	state.toolCalls[0] = tool
 	state.flushChatStreamState(ch)
 	close(ch)
 	parts := drainParts(ch)
-	var call *StreamToolCall
 	for _, p := range parts {
-		if tc, ok := p.(StreamToolCall); ok {
-			call = &tc
+		if _, ok := p.(StreamToolCall); ok {
+			t.Fatalf("invalid input must not produce StreamToolCall")
 		}
 	}
-	if call == nil {
-		t.Fatal("expected StreamToolCall")
+	var sawErr bool
+	var sawEnd bool
+	for _, p := range parts {
+		switch e := p.(type) {
+		case StreamToolInputEnd:
+			if e.ID == "c1" {
+				sawEnd = true
+			}
+		case StreamError:
+			if _, ok := e.Err.(InvalidResponseDataError); !ok {
+				t.Fatalf("expected InvalidResponseDataError, got %T", e.Err)
+			}
+			sawErr = true
+		}
 	}
-	if !json.Valid(call.Input) {
-		t.Errorf("invalid JSON emitted: %s", call.Input)
+	if !sawEnd {
+		t.Errorf("expected StreamToolInputEnd for c1")
 	}
-	if string(call.Input) != "{}" {
-		t.Errorf("expected {}, got %s", call.Input)
+	if !sawErr {
+		t.Errorf("expected StreamError for invalid input")
+	}
+	if state.finishReason != errorFinishReason() {
+		t.Errorf("finish reason = %+v, want error", state.finishReason)
 	}
 }

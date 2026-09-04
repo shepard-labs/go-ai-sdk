@@ -531,7 +531,7 @@ func TestChatStreamUnfinishedToolCallsFlushAtEnd(t *testing.T) {
 	}
 }
 
-func TestChatStreamFinishedToolCallsIgnoreLaterDeltas(t *testing.T) {
+func TestChatStreamTrailingGarbageInvalidatesToolCall(t *testing.T) {
 	f := &recordingFetcher{responses: []*http.Response{sseResponse(sse().
 		add(toolCallChunks(0, "call-1", "weather", `{"city":"SF"}`)).
 		add(toolCallChunks(0, "call-1", "weather", `extra`)).
@@ -539,17 +539,29 @@ func TestChatStreamFinishedToolCallsIgnoreLaterDeltas(t *testing.T) {
 	p := CreateOpenAICompatible(ProviderSettings{BaseURL: "https://example.test", Name: "acme", Fetch: f, Retry: &RetryOptions{MaxRetries: 0}})
 	result, _ := p.Chat("m").DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "hello"}}}}}})
 	parts := collectStream(result.Stream)
-	var toolCalls []StreamToolCall
 	for _, p := range parts {
-		if tc, ok := p.(StreamToolCall); ok {
-			toolCalls = append(toolCalls, tc)
+		if _, ok := p.(StreamToolCall); ok {
+			t.Fatal("trailing garbage must not execute as a tool call")
 		}
 	}
-	if len(toolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(toolCalls))
+	var streamErr *StreamError
+	var finish *StreamFinish
+	for i := range parts {
+		switch p := parts[i].(type) {
+		case StreamError:
+			streamErr = &p
+		case StreamFinish:
+			finish = &p
+		}
 	}
-	if string(toolCalls[0].Input) != `{"city":"SF"}` {
-		t.Fatalf("tool call input = %q (extra delta should be ignored)", string(toolCalls[0].Input))
+	if streamErr == nil {
+		t.Fatal("no StreamError for garbage-suffixed tool input")
+	}
+	if _, ok := streamErr.Err.(InvalidResponseDataError); !ok {
+		t.Fatalf("error = %T (%v), want InvalidResponseDataError", streamErr.Err, streamErr.Err)
+	}
+	if finish == nil || finish.FinishReason.Unified != "error" {
+		t.Fatalf("finish = %#v, want error", finish)
 	}
 }
 
