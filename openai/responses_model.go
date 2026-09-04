@@ -82,6 +82,47 @@ func (m *openaiResponsesModel) DoStream(ctx context.Context, opts ResponsesStrea
 	return result, nil
 }
 
+// CompactionTrigger requests terminal compaction for a Responses call.
+// Pass it via ProviderOptions["openai"]["compactionTrigger"]. When set,
+// the request appends a terminal compaction_trigger input item (across
+// both generate and stream paths).
+type CompactionTrigger struct {
+	Instructions string
+}
+
+// normalizeCompactionTrigger coerces a provider-options compactionTrigger
+// value (CompactionTrigger, *CompactionTrigger, instructions string, or
+// map with an "instructions" key) into its wire item form.
+func normalizeCompactionTrigger(v any) (map[string]any, bool) {
+	item := map[string]any{"type": "compaction_trigger"}
+	switch t := v.(type) {
+	case CompactionTrigger:
+		if t.Instructions != "" {
+			item["instructions"] = t.Instructions
+		}
+		return item, true
+	case *CompactionTrigger:
+		if t == nil {
+			return nil, false
+		}
+		if t.Instructions != "" {
+			item["instructions"] = t.Instructions
+		}
+		return item, true
+	case string:
+		if t != "" {
+			item["instructions"] = t
+		}
+		return item, true
+	case map[string]any:
+		if ins, ok := t["instructions"].(string); ok && ins != "" {
+			item["instructions"] = ins
+		}
+		return item, true
+	}
+	return nil, false
+}
+
 // buildResponsesRequest assembles the OpenAI Responses API request body.
 func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptions) (map[string]any, []Warning, error) {
 	caps := ModelCapabilitiesForID(m.modelID)
@@ -231,7 +272,7 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 	}
 
 	// Build input items from messages.
-	input, inputWarnings, err := m.convertResponsesInput(opts.Messages, chatOptions, body, hasNativeToolSearch(opts.Tools))
+	input, inputWarnings, err := m.convertResponsesInput(opts.Messages, chatOptions, body, hasNativeToolSearch(opts.Tools), opts.Store)
 	if err != nil {
 		return nil, warnings, err
 	}
@@ -248,6 +289,14 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 			})
 		}
 		input = filtered
+	}
+
+	// A compaction trigger is always terminal: it applies after
+	// store=false filtering so it is the last input item.
+	if v, ok := chatOptions["compactionTrigger"]; ok {
+		if trigger, ok := normalizeCompactionTrigger(v); ok {
+			input = append(input, trigger)
+		}
 	}
 
 	body["input"] = input
@@ -514,6 +563,7 @@ func mapResponsesFinishReason(reason string, hasToolCall bool) FinishReason {
 
 // parseResponsesOutputs converts the output array into Content parts.
 func (m *openaiResponsesModel) parseResponsesOutputs(outputs []any) ([]Content, ProviderMetadata, []Warning) {
+	outputs = expandParallelWrapperOutputs(outputs)
 	var out []Content
 	pm := ProviderMetadata{}
 	var warns []Warning
@@ -790,6 +840,55 @@ func (m *openaiResponsesModel) parseResponsesOutputs(outputs []any) ([]Content, 
 	return out, pm, warns
 }
 
+// expandParallelWrapperOutputs expands the Azure parallel-dispatch
+// wrapper: a single output object carrying nested calls in a "calls" (or
+// "tool_calls") array. Nested calls replace the wrapper in place so
+// downstream parsing sees ordinary output items. Unwrapped items pass
+// through untouched. Expansion is recursive to handle nested wrappers.
+func expandParallelWrapperOutputs(outputs []any) []any {
+	out := make([]any, 0, len(outputs))
+	for _, o := range outputs {
+		item, ok := o.(map[string]any)
+		if !ok {
+			out = append(out, o)
+			continue
+		}
+		if nested, ok := parallelWrapperCalls(item); ok {
+			out = append(out, expandParallelWrapperOutputs(nested)...)
+			continue
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// parallelWrapperCalls returns the nested calls of a parallel-dispatch
+// wrapper object: an item holding a "calls" or "tool_calls" array whose
+// elements are all objects carrying a string "type".
+func parallelWrapperCalls(item map[string]any) ([]any, bool) {
+	for _, key := range []string{"calls", "tool_calls"} {
+		raw, ok := item[key].([]any)
+		if !ok || len(raw) == 0 {
+			continue
+		}
+		nested := make([]any, 0, len(raw))
+		for _, n := range raw {
+			nm, ok := n.(map[string]any)
+			if !ok {
+				break
+			}
+			if _, ok := nm["type"].(string); !ok {
+				break
+			}
+			nested = append(nested, nm)
+		}
+		if len(nested) == len(raw) {
+			return nested, true
+		}
+	}
+	return nil, false
+}
+
 // mustJSON marshals v to a json.RawMessage (panics on marshal error - only
 // used for trusted map[string]any inputs).
 func mustJSON(v any) json.RawMessage {
@@ -805,7 +904,7 @@ func mustJSON(v any) json.RawMessage {
 // reports whether the request declares the native tool_search provider
 // tool; only then does a "tool_search" tool result map to a native
 // tool_search_output item.
-func (m *openaiResponsesModel) convertResponsesInput(messages []Message, chatOptions map[string]any, body map[string]any, hasProviderToolSearch bool) ([]any, []Warning, error) {
+func (m *openaiResponsesModel) convertResponsesInput(messages []Message, chatOptions map[string]any, body map[string]any, hasProviderToolSearch bool, store *bool) ([]any, []Warning, error) {
 	mode := "system"
 	if v, ok := chatOptions["systemMessageMode"].(string); ok && v != "" {
 		mode = v
@@ -837,7 +936,7 @@ func (m *openaiResponsesModel) convertResponsesInput(messages []Message, chatOpt
 			}
 			out = append(out, converted)
 		case AssistantMessage:
-			converted, warns, err := m.convertResponsesAssistantMessage(part)
+			converted, warns, err := m.convertResponsesAssistantMessage(part, store)
 			warnings = append(warnings, warns...)
 			if err != nil {
 				return nil, warnings, err
@@ -999,7 +1098,7 @@ func (m *openaiResponsesModel) resolveFileReference(part FileContent) (string, e
 	return ref, nil
 }
 
-func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMessage) ([]any, []Warning, error) {
+func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMessage, store *bool) ([]any, []Warning, error) {
 	var warnings []Warning
 	var out []any
 	for _, content := range msg.Content {
@@ -1050,6 +1149,14 @@ func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMes
 			}
 			out = append(out, item)
 		case ToolCallContent:
+			// With store=false a provider-executed shell call must be
+			// replayed as a native shell_call item: replaying it as a
+			// generic function_call would orphan the paired
+			// shell_call_output on follow-ups.
+			if store != nil && !*store && part.ProviderExecuted && part.ToolName == "shell" {
+				out = append(out, nativeShellCallItem(part))
+				continue
+			}
 			item := map[string]any{
 				"type":      "function_call",
 				"call_id":   part.ToolCallID,
@@ -1075,6 +1182,34 @@ func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMes
 		}
 	}
 	return out, warnings, nil
+}
+
+// nativeShellCallItem replays a provider-executed shell tool call as a
+// native shell_call input item. The call input carries the action payload;
+// the item id round-trips from the top-level or openai-nested provider
+// metadata when present.
+func nativeShellCallItem(part ToolCallContent) map[string]any {
+	item := map[string]any{"type": "shell_call", "call_id": part.ToolCallID}
+	var action any = map[string]any{}
+	if len(part.Input) > 0 && json.Valid(part.Input) {
+		var v any
+		if err := json.Unmarshal(part.Input, &v); err == nil {
+			action = v
+		} else {
+			action = string(part.Input)
+		}
+	} else if len(part.Input) > 0 {
+		action = string(part.Input)
+	}
+	item["action"] = action
+	if id, ok := part.ProviderMetadata["itemId"].(string); ok && id != "" {
+		item["id"] = id
+	} else if openaiPM, ok := part.ProviderMetadata["openai"].(map[string]any); ok {
+		if id, ok := openaiPM["itemId"].(string); ok && id != "" {
+			item["id"] = id
+		}
+	}
+	return item
 }
 
 // hasNativeToolSearch reports whether the request declares the native
@@ -1142,20 +1277,43 @@ func (m *openaiResponsesModel) convertResponsesToolMessage(msg ToolMessage, hasP
 			// An ordinary client function literally named "tool_search"
 			// is not the native provider tool: replay it as a regular
 			// function_call_output item.
-			out = append(out, map[string]any{
+			item := map[string]any{
 				"type":    "function_call_output",
 				"call_id": part.ToolCallID,
 				"output":  stringifyToolResult(part.Output),
-			})
+			}
+			applyToolResultBreakpoint(item, part)
+			out = append(out, item)
 		default:
-			out = append(out, map[string]any{
+			item := map[string]any{
 				"type":    "function_call_output",
 				"call_id": part.ToolCallID,
 				"output":  stringifyToolResult(part.Output),
-			})
+			}
+			applyToolResultBreakpoint(item, part)
+			out = append(out, item)
 		}
 	}
 	return out, nil
+}
+
+// applyToolResultBreakpoint forwards a breakpoint marker from a scalar
+// tool result's ProviderOptions["openai"]["breakpoint"] onto the wire
+// output item. Non-scalar ("content"-type) results are left untouched.
+// This is passthrough only: no caching behavior is implemented here.
+func applyToolResultBreakpoint(item map[string]any, part ToolResultContent) {
+	if part.Output.Type == "content" {
+		return
+	}
+	openaiOpts, ok := part.ProviderOptions["openai"].(map[string]any)
+	if !ok {
+		return
+	}
+	marker, ok := openaiOpts["breakpoint"]
+	if !ok || marker == nil {
+		return
+	}
+	item["breakpoint"] = marker
 }
 
 func stringifyToolResult(output ToolResultOutput) any {

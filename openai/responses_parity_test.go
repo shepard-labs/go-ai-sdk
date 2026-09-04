@@ -1,6 +1,8 @@
 package openai
 
 import (
+	"context"
+	"net/http"
 	"reflect"
 	"testing"
 
@@ -316,4 +318,227 @@ func normalizeParityWire(v any) any {
 		return out
 	}
 	return v
+}
+
+// TestResponsesStoreFalseReplaysShellCallNatively verifies that with
+// store=false a provider-executed shell call replays as a native
+// shell_call item (paired with shell_call_output), not a generic
+// function_call.
+func TestResponsesStoreFalseReplaysShellCallNatively(t *testing.T) {
+	respBody := `{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`
+	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
+	p := newOpenAIForTest(f, "https://example.test/v1")
+	storeFalse := false
+	res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
+		Store: &storeFalse,
+		Messages: []Message{
+			UserMessage{Content: []UserContent{TextContent{Text: "hi"}}},
+			AssistantMessage{Content: []AssistantContent{ToolCallContent{
+				ToolCallContentEmbed: ToolCallContentEmbed{
+					ToolCallID: "sc-call",
+					ToolName:   "shell",
+					Input:      []byte(`{"command":["ls"],"container_id":"c-1"}`),
+					ProviderMetadata: ProviderMetadata{
+						"openai": map[string]any{"itemId": "sc-1"},
+					},
+				},
+				ProviderExecuted: true,
+			}}},
+			ToolMessage{Content: []ToolContent{ToolResultContent{
+				ToolResultContent: openaicompatible.ToolResultContent{ToolCallID: "sc-call", Output: ToolResultOutput{Type: "text", Value: "ok"}},
+				ToolName:          "shell",
+			}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DoGenerate: %v", err)
+	}
+	body := decodeRequestBody(t, res.Request.Body)
+	input, ok := body["input"].([]any)
+	if !ok {
+		t.Fatalf("input: %v", body["input"])
+	}
+	var sawShellCall, sawShellOutput, sawFunctionCall bool
+	for _, item := range input {
+		m, _ := item.(map[string]any)
+		switch m["type"] {
+		case "shell_call":
+			sawShellCall = true
+			if m["call_id"] != "sc-call" {
+				t.Errorf("shell_call call_id = %v", m["call_id"])
+			}
+			if m["id"] != "sc-1" {
+				t.Errorf("shell_call id = %v (itemId should round-trip)", m["id"])
+			}
+			action, _ := m["action"].(map[string]any)
+			if action["container_id"] != "c-1" {
+				t.Errorf("shell_call action = %v", m["action"])
+			}
+		case "shell_call_output":
+			sawShellOutput = true
+		case "function_call":
+			sawFunctionCall = true
+		}
+	}
+	if !sawShellCall {
+		t.Errorf("expected native shell_call item, input: %v", input)
+	}
+	if !sawShellOutput {
+		t.Errorf("expected shell_call_output item, input: %v", input)
+	}
+	if sawFunctionCall {
+		t.Errorf("provider-executed shell call must not replay as function_call, input: %v", input)
+	}
+}
+
+// TestResponsesCompactionTriggerGenerate verifies a CompactionTrigger
+// option appends a terminal compaction_trigger input item on generate.
+func TestResponsesCompactionTriggerGenerate(t *testing.T) {
+	respBody := `{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`
+	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
+	p := newOpenAIForTest(f, "https://example.test/v1")
+	res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
+		Messages:        []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}},
+		ProviderOptions: ProviderOptions{"openai": map[string]any{"compactionTrigger": CompactionTrigger{Instructions: "summarize"}}},
+	})
+	if err != nil {
+		t.Fatalf("DoGenerate: %v", err)
+	}
+	assertTerminalCompactionTrigger(t, res.Request.Body, "summarize")
+}
+
+// TestResponsesCompactionTriggerStream verifies a CompactionTrigger
+// option appends a terminal compaction_trigger input item on stream.
+func TestResponsesCompactionTriggerStream(t *testing.T) {
+	sseBody := "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"id\":\"r1\"}}\n\n"
+	f := &recordingFetcher{responses: []*http.Response{response(200, sseBody)}}
+	p := newOpenAIForTest(f, "https://example.test/v1")
+	res, err := p.Responses("gpt-4o").DoStream(context.Background(), ResponsesStreamOptions{
+		ResponsesGenerateOptions: ResponsesGenerateOptions{
+			Messages:        []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}},
+			ProviderOptions: ProviderOptions{"openai": map[string]any{"compactionTrigger": CompactionTrigger{Instructions: "summarize"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DoStream: %v", err)
+	}
+	for range res.Parts {
+	}
+	assertTerminalCompactionTrigger(t, res.Request.Body, "summarize")
+}
+
+func assertTerminalCompactionTrigger(t *testing.T, reqBody []byte, instructions string) {
+	t.Helper()
+	body := decodeRequestBody(t, reqBody)
+	input, ok := body["input"].([]any)
+	if !ok || len(input) == 0 {
+		t.Fatalf("input: %v", body["input"])
+	}
+	last, _ := input[len(input)-1].(map[string]any)
+	if last["type"] != "compaction_trigger" {
+		t.Fatalf("last input item should be compaction_trigger, got: %v", input[len(input)-1])
+	}
+	if last["instructions"] != instructions {
+		t.Errorf("instructions = %v, want %q", last["instructions"], instructions)
+	}
+}
+
+// TestResponsesParseParallelWrapper is a table test for the Azure
+// parallel-dispatch wrapper expansion in generate responses.
+func TestResponsesParseParallelWrapper(t *testing.T) {
+	call := func(id, name string) string {
+		return `{"type":"function_call","call_id":"` + id + `","name":"` + name + `","arguments":"{}"}`
+	}
+	for _, tc := range []struct {
+		name      string
+		output    string
+		wantCalls []string
+	}{
+		{"unwrapped single call", `[` + call("c1", "f1") + `]`, []string{"f1"}},
+		{"wrapped calls key", `[{"type":"parallel_tool_calls","calls":[` + call("c1", "f1") + `,` + call("c2", "f2") + `]}]`, []string{"f1", "f2"}},
+		{"wrapped tool_calls key", `[{"type":"parallel","tool_calls":[` + call("c1", "f1") + `]}]`, []string{"f1"}},
+		{"nested wrappers", `[{"type":"parallel_tool_calls","calls":[{"type":"parallel_tool_calls","calls":[` + call("c1", "f1") + `]}]}]`, []string{"f1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			respBody := `{"id":"r","status":"completed","output":` + tc.output + `}`
+			f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
+			p := newOpenAIForTest(f, "https://example.test/v1")
+			res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
+				Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}},
+			})
+			if err != nil {
+				t.Fatalf("DoGenerate: %v", err)
+			}
+			var names []string
+			for _, c := range res.Content {
+				if tc, ok := c.(ToolCallContent); ok {
+					names = append(names, tc.ToolName)
+				}
+			}
+			if len(names) != len(tc.wantCalls) {
+				t.Fatalf("tool calls = %v, want %v", names, tc.wantCalls)
+			}
+			for i := range names {
+				if names[i] != tc.wantCalls[i] {
+					t.Errorf("tool calls = %v, want %v", names, tc.wantCalls)
+					break
+				}
+			}
+		})
+	}
+}
+
+// TestResponsesToolResultBreakpointPassthrough is a table test verifying
+// breakpoint markers on scalar tool results are forwarded to the wire
+// function_call_output item, and never added for content-type results.
+func TestResponsesToolResultBreakpointPassthrough(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		output         ToolResultOutput
+		breakpoint     any
+		wantBreakpoint bool
+	}{
+		{"text with breakpoint", ToolResultOutput{Type: "text", Value: "ok"}, "bp-1", true},
+		{"json with breakpoint", ToolResultOutput{Type: "json", Value: map[string]any{"a": 1}}, "bp-2", true},
+		{"content skips breakpoint", ToolResultOutput{Type: "content", Value: []any{"x"}}, "bp-3", false},
+		{"scalar without breakpoint", ToolResultOutput{Type: "text", Value: "ok"}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			respBody := `{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`
+			f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
+			p := newOpenAIForTest(f, "https://example.test/v1")
+			result := openaicompatible.ToolResultContent{ToolCallID: "c1", Output: tc.output}
+			if tc.breakpoint != nil {
+				result.ProviderOptions = openaicompatible.ProviderMetadata{"openai": map[string]any{"breakpoint": tc.breakpoint}}
+			}
+			res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
+				Messages: []Message{
+					UserMessage{Content: []UserContent{TextContent{Text: "hi"}}},
+					ToolMessage{Content: []ToolContent{ToolResultContent{
+						ToolResultContent: result,
+						ToolName:          "get_weather",
+					}}},
+				},
+			})
+			if err != nil {
+				t.Fatalf("DoGenerate: %v", err)
+			}
+			body := decodeRequestBody(t, res.Request.Body)
+			input, ok := body["input"].([]any)
+			if !ok || len(input) != 2 {
+				t.Fatalf("input: %v", body["input"])
+			}
+			item, _ := input[1].(map[string]any)
+			if item["type"] != "function_call_output" {
+				t.Fatalf("item type = %v", item["type"])
+			}
+			bp, has := item["breakpoint"]
+			if has != tc.wantBreakpoint {
+				t.Errorf("breakpoint presence = %v, want %v (item: %v)", has, tc.wantBreakpoint, item)
+			}
+			if tc.wantBreakpoint && bp != tc.breakpoint {
+				t.Errorf("breakpoint = %v, want %v", bp, tc.breakpoint)
+			}
+		})
+	}
 }

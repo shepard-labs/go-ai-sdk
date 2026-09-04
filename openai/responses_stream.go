@@ -311,6 +311,17 @@ func (m *openaiResponsesModel) runResponsesStream(
 		if opts.IncludeRawChunks {
 			parts <- StreamRaw{Raw: append([]byte(nil), raw...)}
 		}
+		// A Chat Completions SSE chunk sent to the Responses parser
+		// (choices-shaped, no Responses "type") would otherwise match no
+		// case and surface as a generic unknown-event error. Fail fast
+		// with an actionable wrong-surface error instead.
+		if isChoicesShapedChunk(raw) {
+			parts <- StreamError{Err: &APICallError{
+				Message: "wrong API surface: received a Chat Completions chunk (\"choices\") on a Responses stream; use the chat model instead of the responses model for Chat Completions SSE",
+			}}
+			state.finishReason = errorFinishReason()
+			return false
+		}
 		var event responsesStreamEvent
 		if err := json.Unmarshal(raw, &event); err != nil {
 			parts <- StreamError{Err: InvalidResponseDataError{Message: err.Error(), Data: string(raw)}}
@@ -357,6 +368,20 @@ func (m *openaiResponsesModel) runResponsesStream(
 		Usage:            finalUsage,
 		ProviderMetadata: state.finishMeta,
 	}
+}
+
+// isChoicesShapedChunk reports whether a raw SSE payload is a Chat
+// Completions chunk (a top-level "choices" array with no Responses event
+// "type") rather than a Responses event.
+func isChoicesShapedChunk(raw []byte) bool {
+	var probe struct {
+		Type    string          `json:"type"`
+		Choices json.RawMessage `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	return probe.Type == "" && len(probe.Choices) > 0
 }
 
 // responsesStreamEvent is the union of fields a Responses API event can
@@ -588,16 +613,21 @@ func (m *openaiResponsesModel) processResponsesEvent(parts chan<- StreamPart, sr
 		state.finishReason = errorFinishReason()
 	case "error":
 		if event.Error != nil {
-			// Per spec: a stream-level error event should surface as
-			// an APICallError with a derived status code from the
-			// error type.
+			// Per spec: a stream-level error event surfaces as a
+			// StreamProviderError wrapping an APICallError with a
+			// derived status code from the error type.
 			status, _ := openAIErrorTypeStatusCode(event.Error.Type)
-			parts <- StreamError{Err: &APICallError{
-				Message: event.Error.Message,
-				Type:    event.Error.Type,
-				Param:   event.Error.Param,
-				Code:    event.Error.Code,
-				Status:  status,
+			parts <- StreamError{Err: &StreamProviderError{
+				Provider: "openai",
+				Code:     event.Error.Code,
+				Message:  event.Error.Message,
+				Cause: &APICallError{
+					Message: event.Error.Message,
+					Type:    event.Error.Type,
+					Param:   event.Error.Param,
+					Code:    event.Error.Code,
+					Status:  status,
+				},
 			}}
 		}
 	default:

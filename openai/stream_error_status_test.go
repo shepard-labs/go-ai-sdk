@@ -47,7 +47,8 @@ func TestChatStreamErrorSurfacesAPICallError(t *testing.T) {
 
 // TestResponsesStreamErrorSurfacesAPICallError verifies that a
 // responses stream whose first event is a wire "error" surfaces a
-// *APICallError with a status code derived from the error type.
+// *StreamProviderError wrapping a *APICallError with a status code
+// derived from the error type.
 func TestResponsesStreamErrorSurfacesAPICallError(t *testing.T) {
 	sseBody := "data: {\"type\":\"error\",\"error\":{\"message\":\"forbidden\",\"type\":\"permission_error\",\"code\":\"forbidden\"}}\n\n"
 	parts := make(chan StreamPart, 8)
@@ -65,9 +66,16 @@ func TestResponsesStreamErrorSurfacesAPICallError(t *testing.T) {
 	if got.Err == nil {
 		t.Fatal("expected StreamError, got none")
 	}
-	apiErr, ok := got.Err.(*APICallError)
+	spe, ok := got.Err.(*StreamProviderError)
 	if !ok {
-		t.Fatalf("expected *APICallError, got %T: %v", got.Err, got.Err)
+		t.Fatalf("expected *StreamProviderError, got %T: %v", got.Err, got.Err)
+	}
+	if spe.Provider != "openai" {
+		t.Errorf("Provider: %q, want openai", spe.Provider)
+	}
+	apiErr, ok := spe.Unwrap().(*APICallError)
+	if !ok {
+		t.Fatalf("expected wrapped *APICallError, got %T", spe.Unwrap())
 	}
 	if apiErr.Status != 403 {
 		t.Errorf("Status: %d, want 403 (derived from permission_error)", apiErr.Status)

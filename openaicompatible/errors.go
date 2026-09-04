@@ -206,3 +206,39 @@ func rawBodyFallbackMessage(status int, body []byte) string {
 func defaultRetryableStatus(status int) bool {
 	return status == http.StatusTooManyRequests || status >= 500
 }
+
+// StreamProviderError is a provider error delivered mid-stream (e.g. a
+// Responses SSE "error" event). It carries the originating provider name,
+// the wire error code, and a message, and wraps the derived *APICallError
+// so both errors.As(err, &StreamProviderError{}) and
+// errors.As(err, &APICallError{}) succeed.
+type StreamProviderError struct {
+	Provider string
+	Code     any
+	Message  string
+	Cause    *APICallError
+}
+
+func (e *StreamProviderError) Error() string {
+	if e == nil {
+		return ""
+	}
+	base := "openaicompatible: stream error from provider " + e.Provider
+	if e.Code != nil {
+		if s := fmt.Sprint(e.Code); s != "" && s != "<nil>" {
+			base += fmt.Sprintf(" (code %v)", e.Code)
+		}
+	}
+	if e.Message != "" {
+		base += ": " + e.Message
+	}
+	return base
+}
+
+// Unwrap returns the derived *APICallError, if any.
+func (e *StreamProviderError) Unwrap() error {
+	if e == nil || e.Cause == nil {
+		return nil
+	}
+	return e.Cause
+}

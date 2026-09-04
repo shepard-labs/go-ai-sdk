@@ -26,3 +26,7 @@ type APICallError = openaicompatible.APICallError
 // TooManyEmbeddingValuesForCallError is returned when the caller supplies
 // more embedding input values than the model's MaxEmbeddingsPerCall allows.
 type TooManyEmbeddingValuesForCallError = openaicompatible.TooManyEmbeddingValuesForCallError
+
+// StreamProviderError is a provider error delivered mid-stream (e.g. a
+// Responses SSE "error" event). It wraps the derived *APICallError.
+type StreamProviderError = openaicompatible.StreamProviderError
