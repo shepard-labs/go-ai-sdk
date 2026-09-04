@@ -23,20 +23,81 @@ func (m *openaiEmbeddingModel) MaxEmbeddingsPerCall() int {
 }
 func (m *openaiEmbeddingModel) SupportsParallelCalls() bool { return true }
 
+// embeddingByteBudgetPerCall caps the total UTF-8 bytes sent in a single
+// embeddings request. Inputs that exceed the budget are split into
+// sequential calls; a single input larger than the budget still goes out
+// alone in its own call (inputs are never split mid-string).
+const embeddingByteBudgetPerCall = 300000
+
 func (m *openaiEmbeddingModel) DoEmbed(ctx context.Context, opts EmbedOptions) (*EmbedResult, error) {
 	if m.provider.err != nil {
 		return nil, m.provider.err
 	}
-	body := m.buildEmbedRequest(opts)
-	encoded, err := jsonMarshal(body)
-	if err != nil {
-		return nil, err
+	chunks := chunkEmbedInputs(opts.Values, embeddingByteBudgetPerCall)
+	var embeddings [][]float64
+	var warnings []Warning
+	totalTokens := 0
+	hasUsage := false
+	var lastBody, lastEncoded []byte
+	for _, chunk := range chunks {
+		sub := opts
+		sub.Values = chunk
+		body := m.buildEmbedRequest(sub)
+		encoded, err := jsonMarshal(body)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := m.provider.executeJSON(ctx, endpointEmbeddings, encoded, opts.Headers)
+		if err != nil {
+			return nil, err
+		}
+		parsed, err := m.parseEmbedResponse(resp.Body, encoded)
+		if err != nil {
+			return nil, err
+		}
+		embeddings = append(embeddings, parsed.Embeddings...)
+		warnings = append(warnings, parsed.Warnings...)
+		if parsed.Usage != nil {
+			totalTokens += parsed.Usage.Tokens
+			hasUsage = true
+		}
+		lastBody, lastEncoded = resp.Body, encoded
 	}
-	resp, err := m.provider.executeJSON(ctx, endpointEmbeddings, encoded, opts.Headers)
-	if err != nil {
-		return nil, err
+	result := &EmbedResult{
+		Embeddings: embeddings,
+		Warnings:   warnings,
+		Request:    RequestMetadata{Body: lastEncoded},
+		Response:   ResponseMetadata{Body: lastBody, ModelID: m.modelID},
 	}
-	return m.parseEmbedResponse(resp.Body, encoded)
+	if hasUsage {
+		result.Usage = &EmbeddingUsage{Tokens: totalTokens}
+	}
+	return result, nil
+}
+
+// chunkEmbedInputs splits values into consecutive groups whose total byte
+// length stays within budget. Order is preserved; a single oversized value
+// occupies its own chunk.
+func chunkEmbedInputs(values []string, budget int) [][]string {
+	var chunks [][]string
+	var cur []string
+	curBytes := 0
+	for _, v := range values {
+		if len(cur) > 0 && curBytes+len(v) > budget {
+			chunks = append(chunks, cur)
+			cur = nil
+			curBytes = 0
+		}
+		cur = append(cur, v)
+		curBytes += len(v)
+	}
+	if len(cur) > 0 {
+		chunks = append(chunks, cur)
+	}
+	if len(chunks) == 0 {
+		chunks = [][]string{values}
+	}
+	return chunks
 }
 
 func (m *openaiEmbeddingModel) buildEmbedRequest(opts EmbedOptions) map[string]any {

@@ -1,6 +1,9 @@
 package openai
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // Capabilities describes per-model behavior used to strip or rename sampling
 // parameters and to drive system-message mode selection.
@@ -37,9 +40,12 @@ func ModelCapabilitiesForID(modelID string) Capabilities {
 
 	lower := strings.ToLower(modelID)
 	family := familyPrefix(lower)
+	gptMajor, gptMinor, isGpt := parseGptVersion(lower)
+	_, isOSeries := parseOSeriesVersion(lower)
 
-	// Reasoning families.
-	if isReasoningFamilyPrefix(family) && !isChatLatestVariant(lower) {
+	// Reasoning families, including future anchored versions (gpt-5.7+,
+	// o5+) that familyPrefix doesn't enumerate yet.
+	if (isReasoningFamilyPrefix(family) || (isGpt && gptMajor >= 5) || isOSeries) && !isChatLatestVariant(lower) {
 		caps.IsReasoningModel = true
 		caps.SystemMessageMode = "developer"
 	}
@@ -58,7 +64,9 @@ func ModelCapabilitiesForID(modelID string) Capabilities {
 	}
 
 	// Non-reasoning parameters when reasoning effort is "none".
-	if family == "gpt-5.1" || family == "gpt-5.2" || family == "gpt-5.3" || family == "gpt-5.4" || family == "gpt-5.5" || family == "gpt-5.6" {
+	// Anchored on gpt-5.x with minor >= 1 so future versions (gpt-5.7+)
+	// classify the same as the enumerated gpt-5.1..gpt-5.6 families.
+	if isGpt && gptMajor == 5 && gptMinor >= 1 {
 		caps.SupportsNonReasoningParameters = true
 	}
 
@@ -100,7 +108,15 @@ func MaxCompletionTokensForModel(modelID string) int {
 		"gpt-5.1", "gpt-5.1-2025-11-13", "gpt-5.1-chat-latest",
 		"gpt-5.2", "gpt-5.2-2025-12-11", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11",
 		"gpt-5.3-chat-latest", "gpt-5.4", "gpt-5.5",
-		"gpt-5.6", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra":
+		"		gpt-5.6", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra":
+		return 128000
+	}
+	// Best-effort fallback for future anchored versions (gpt-5.7+, o5+).
+	lower := strings.ToLower(modelID)
+	if major, _, ok := parseGptVersion(lower); ok && major >= 5 {
+		return 128000
+	}
+	if _, ok := parseOSeriesVersion(lower); ok {
 		return 128000
 	}
 	return 0
@@ -151,3 +167,61 @@ func isGpt5NanoFamily(lower string) bool {
 func isGpt54NanoFamily(lower string) bool {
 	return strings.HasPrefix(lower, "gpt-5.4-nano")
 }
+
+// parseGptVersion parses an anchored "gpt-<major>[.<minor>]" prefix out of
+// a lowercased model ID, ignoring any trailing suffix ("-nano",
+// "-chat-latest", date snapshots). It reports ok=false when the ID isn't
+// gpt-anchored or carries no version digits. All indexing is
+// bounds-checked so unrecognized IDs never panic.
+func parseGptVersion(lower string) (major, minor int, ok bool) {
+	rest, found := strings.CutPrefix(lower, "gpt-")
+	if !found {
+		return 0, 0, false
+	}
+	i := 0
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return 0, 0, false
+	}
+	major, _ = strconv.Atoi(rest[:i])
+	rest = rest[i:]
+	if !strings.HasPrefix(rest, ".") {
+		return major, 0, true
+	}
+	j := 1
+	for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+		j++
+	}
+	if j == 1 {
+		return major, 0, true
+	}
+	minor, _ = strconv.Atoi(rest[1:j])
+	return major, minor, true
+}
+
+// parseOSeriesVersion parses an anchored "o<digits>" prefix (o1, o3-mini,
+// o4-mini, o5, ...) out of a lowercased model ID. Non o-series IDs report
+// ok=false; indexing is bounds-checked so unrecognized IDs never panic.
+func parseOSeriesVersion(lower string) (n int, ok bool) {
+	if !strings.HasPrefix(lower, "o") {
+		return 0, false
+	}
+	rest := lower[1:]
+	i := 0
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return 0, false
+	}
+	n, _ = strconv.Atoi(rest[:i])
+	return n, true
+}
+
+// Unknown model IDs (fine-tunes, proxies, future names outside the anchored
+// parsers above) keep the conservative defaults from defaultCapabilities:
+// non-reasoning, system message mode, no optional processing tiers. This is
+// enforced structurally — ModelCapabilitiesForID only enables flags on
+// positive family/version matches — so there is nothing to panic on.

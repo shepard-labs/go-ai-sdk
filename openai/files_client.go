@@ -3,7 +3,10 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"mime/multipart"
+	"net/http"
+	"net/url"
 	"strconv"
 )
 
@@ -61,6 +64,89 @@ func (c *openaiFilesClient) UploadFile(ctx context.Context, opts FilesUploadOpti
 		return nil, InvalidResponseDataError{Message: "failed to parse files response: " + err.Error()}
 	}
 	return mapFilesResponse(raw, opts.Filename, opts.MediaType), nil
+}
+
+// Upload reads the full content from r and delegates to UploadFile so both
+// paths share the same multipart encoding (purpose default, expires_after
+// brackets, filename fallback).
+func (c *openaiFilesClient) Upload(ctx context.Context, r io.Reader, filename, mediaType string, providerOptions ProviderOptions) (*FilesUploadResult, error) {
+	if c.provider.err != nil {
+		return nil, c.provider.err
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	return c.UploadFile(ctx, FilesUploadOptions{
+		Data:            data,
+		MediaType:       mediaType,
+		Filename:        filename,
+		ProviderOptions: providerOptions,
+	})
+}
+
+// GetFileMetadata retrieves a file object (GET /files/{id}). The response
+// shares the upload response shape, so it maps through mapFilesResponse.
+func (c *openaiFilesClient) GetFileMetadata(ctx context.Context, fileID string) (*FilesUploadResult, error) {
+	if c.provider.err != nil {
+		return nil, c.provider.err
+	}
+	if fileID == "" {
+		return nil, InvalidPromptError{Message: "fileID must not be empty"}
+	}
+	resp, err := c.provider.executeBuffered(ctx, http.MethodGet, filesFilePath(fileID), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var raw filesAPIResponse
+	if err := json.Unmarshal(resp.Body, &raw); err != nil {
+		return nil, InvalidResponseDataError{Message: "failed to parse files response: " + err.Error()}
+	}
+	return mapFilesResponse(raw, "", ""), nil
+}
+
+// DownloadFile downloads file content (GET /files/{id}/content) and
+// returns the raw bytes.
+func (c *openaiFilesClient) DownloadFile(ctx context.Context, fileID string) ([]byte, error) {
+	if c.provider.err != nil {
+		return nil, c.provider.err
+	}
+	if fileID == "" {
+		return nil, InvalidPromptError{Message: "fileID must not be empty"}
+	}
+	resp, err := c.provider.executeBuffered(ctx, http.MethodGet, filesFilePath(fileID)+"/content", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
+}
+
+// DeleteFile deletes a file (DELETE /files/{id}) and reports the server's
+// deleted flag.
+func (c *openaiFilesClient) DeleteFile(ctx context.Context, fileID string) (bool, error) {
+	if c.provider.err != nil {
+		return false, c.provider.err
+	}
+	if fileID == "" {
+		return false, InvalidPromptError{Message: "fileID must not be empty"}
+	}
+	resp, err := c.provider.executeBuffered(ctx, http.MethodDelete, filesFilePath(fileID), nil, nil)
+	if err != nil {
+		return false, err
+	}
+	var raw struct {
+		ID      string `json:"id"`
+		Deleted bool   `json:"deleted"`
+	}
+	if err := json.Unmarshal(resp.Body, &raw); err != nil {
+		return false, InvalidResponseDataError{Message: "failed to parse files response: " + err.Error()}
+	}
+	return raw.Deleted, nil
+}
+
+// filesFilePath escapes a file ID into its /files/{id} path.
+func filesFilePath(fileID string) string {
+	return endpointFiles + "/" + url.PathEscape(fileID)
 }
 
 type filesAPIResponse struct {

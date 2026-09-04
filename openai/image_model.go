@@ -47,6 +47,7 @@ func (m *openaiImageModel) DoGenerate(ctx context.Context, opts ImageGenerateOpt
 // hasDefaultResponseFormat returns true for model families that always
 // return b64_json and ignore the response_format field.
 func hasDefaultResponseFormat(modelID string) bool {
+	lower := strings.ToLower(modelID)
 	prefixes := []string{
 		"chatgpt-image-",
 		"gpt-image-1-mini",
@@ -55,11 +56,42 @@ func hasDefaultResponseFormat(modelID string) bool {
 		"gpt-image-2",
 	}
 	for _, p := range prefixes {
-		if strings.HasPrefix(modelID, p) {
+		if strings.HasPrefix(lower, p) {
 			return true
 		}
 	}
 	return false
+}
+
+// gptImageVersion parses an anchored "gpt-image-<major>[.<minor>]" prefix
+// out of a model ID, ignoring case and any trailing suffix ("-mini",
+// date snapshots). It reports ok=false for non gpt-image IDs. All
+// indexing is bounds-checked so unrecognized IDs never panic.
+func gptImageVersion(modelID string) (major int, ok bool) {
+	lower := strings.ToLower(modelID)
+	rest, found := strings.CutPrefix(lower, "gpt-image-")
+	if !found {
+		return 0, false
+	}
+	i := 0
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return 0, false
+	}
+	n := 0
+	for _, c := range rest[:i] {
+		n = n*10 + int(c-'0')
+	}
+	return n, true
+}
+
+// isGptImageFamily reports anchored gpt-image-<version> membership, so
+// future versions (gpt-image-3+) classify the same as current ones.
+func isGptImageFamily(modelID string) bool {
+	_, ok := gptImageVersion(modelID)
+	return ok
 }
 
 func (m *openaiImageModel) doGenerateImages(ctx context.Context, opts ImageGenerateOptions) (*ImageGenerateResult, error) {
@@ -104,25 +136,25 @@ func (m *openaiImageModel) doGenerateImages(ctx context.Context, opts ImageGener
 			body["style"] = style
 		}
 		if background, ok := v["background"].(string); ok && background != "" {
-			if !strings.HasPrefix(m.modelID, "gpt-image-") {
+			if !isGptImageFamily(m.modelID) {
 				return nil, InvalidPromptError{Message: "background is only supported for gpt-image-*"}
 			}
 			body["background"] = background
 		}
 		if outputFormat, ok := v["outputFormat"].(string); ok && outputFormat != "" {
-			if !strings.HasPrefix(m.modelID, "gpt-image-") {
+			if !isGptImageFamily(m.modelID) {
 				return nil, InvalidPromptError{Message: "outputFormat is only supported for gpt-image-*"}
 			}
 			body["output_format"] = outputFormat
 		}
 		if oc, ok := v["outputCompression"].(int); ok {
-			if !strings.HasPrefix(m.modelID, "gpt-image-") {
+			if !isGptImageFamily(m.modelID) {
 				return nil, InvalidPromptError{Message: "outputCompression is only supported for gpt-image-*"}
 			}
 			body["output_compression"] = oc
 		}
 		if mod, ok := v["moderation"].(string); ok && mod != "" {
-			if !strings.HasPrefix(m.modelID, "gpt-image-") {
+			if !isGptImageFamily(m.modelID) {
 				return nil, InvalidPromptError{Message: "moderation is only supported for gpt-image-*"}
 			}
 			body["moderation"] = mod
@@ -200,7 +232,7 @@ func (m *openaiImageModel) doEdit(ctx context.Context, opts ImageGenerateOptions
 		// inputFidelity is edits-only (gpt-image-*).
 		if v, ok := opts.ProviderOptions["openai"]; ok {
 			if fidelity, ok := v["inputFidelity"].(string); ok && fidelity != "" {
-				if !strings.HasPrefix(m.modelID, "gpt-image-") {
+				if !isGptImageFamily(m.modelID) {
 					return InvalidPromptError{Message: "inputFidelity is only supported for gpt-image-*"}
 				}
 				if err := w.WriteField("input_fidelity", fidelity); err != nil {
@@ -228,7 +260,7 @@ func validateImageQuality(modelID, q string) error {
 		if q != "standard" && q != "hd" {
 			return InvalidPromptError{Message: fmt.Sprintf("dall-e-2 quality must be standard|hd, got %q", q)}
 		}
-	case strings.HasPrefix(modelID, "gpt-image-"):
+	case isGptImageFamily(modelID):
 		switch q {
 		case "low", "medium", "high", "auto":
 			// ok

@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"io"
 	"regexp"
 )
 
@@ -139,6 +140,16 @@ type TranscriptionModel interface {
 // Files is the openai Files API surface.
 type Files interface {
 	UploadFile(ctx context.Context, opts FilesUploadOptions) (*FilesUploadResult, error)
+	// Upload streams file content from r and delegates to UploadFile, so
+	// callers don't have to buffer the payload themselves.
+	Upload(ctx context.Context, r io.Reader, filename, mediaType string, providerOptions ProviderOptions) (*FilesUploadResult, error)
+	// GetFileMetadata retrieves a file object (GET /files/{id}).
+	GetFileMetadata(ctx context.Context, fileID string) (*FilesUploadResult, error)
+	// DownloadFile downloads file content (GET /files/{id}/content).
+	DownloadFile(ctx context.Context, fileID string) ([]byte, error)
+	// DeleteFile deletes a file (DELETE /files/{id}), reporting the
+	// server's deleted flag.
+	DeleteFile(ctx context.Context, fileID string) (bool, error)
 }
 
 // Skills is the openai Skills API surface.

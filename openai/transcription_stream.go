@@ -70,6 +70,11 @@ func (m *openaiTranscriptionModel) DoStream(ctx context.Context, opts Transcript
 	if err := writer.Close(); err != nil {
 		return nil, err
 	}
+	// Cancel-on-pre-open: if the context died while the multipart body was
+	// being built, fail without opening the stream.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	resp, err := m.provider.executeMultipartStream(ctx, endpointAudioTranscriptions, opts.Headers, body.Bytes(), writer.FormDataContentType())
 	if err != nil {
 		return nil, err
@@ -159,30 +164,24 @@ func (m *openaiTranscriptionModel) runTranscriptionStream(ctx context.Context, r
 }
 
 // executeMultipartStream performs a multipart POST and returns the response
-// as a stream. Unlike executeMultipart it does not buffer the body.
+// as a stream. Unlike executeMultipart it does not buffer the body and does
+// not retry. Request construction is shared with executeMultipart via
+// newMultipartRequest; only the SSE subprotocol default (Accept) is layered
+// here, still overridable per call. Auth flows through headersForCall, so a
+// per-call Authorization header overrides the provider default.
 func (p *openaiProvider) executeMultipartStream(ctx context.Context, path string, perCall http.Header, body []byte, contentType string) (*httpStreamResponse, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
-	requestURL, err := p.requestURL(path)
-	if err != nil {
-		return nil, err
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
+	if perCall.Get("Accept") == "" {
+		perCall = cloneHeaderWithDefault(perCall, "Accept", "text/event-stream")
+	}
+	req, err := p.newMultipartRequest(ctx, path, perCall, body, contentType)
 	if err != nil {
 		return nil, err
-	}
-	for k, values := range p.headersForCall(perCall) {
-		for _, v := range values {
-			req.Header.Add(k, v)
-		}
-	}
-	req.Header.Set("Content-Type", contentType)
-	if p.generateID != nil {
-		req.Header.Set("x-request-id", p.generateID())
 	}
 	resp, err := p.fetch.Do(req)
 	if err != nil {
@@ -192,4 +191,14 @@ func (p *openaiProvider) executeMultipartStream(ctx context.Context, path string
 		return nil, p.readAPIError(resp)
 	}
 	return &httpStreamResponse{Body: resp.Body, Headers: resp.Header.Clone()}, nil
+}
+
+// cloneHeaderWithDefault copies h (which may be nil) and sets key to value.
+func cloneHeaderWithDefault(h http.Header, key, value string) http.Header {
+	out := http.Header{}
+	for k, values := range h {
+		out[k] = append([]string(nil), values...)
+	}
+	out.Set(key, value)
+	return out
 }

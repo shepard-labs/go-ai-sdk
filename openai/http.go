@@ -46,14 +46,35 @@ func (p *openaiProvider) executeStream(ctx context.Context, path string, body []
 	return p.executeStreamBuffered(ctx, http.MethodPost, path, body, perCall)
 }
 
+// newMultipartRequest builds a multipart POST request for {baseURL}{path}
+// with the given pre-built body. It is shared by the buffered
+// executeMultipart and the streaming multipart path so header handling
+// (auth spread, content type, request ID) stays identical.
+func (p *openaiProvider) newMultipartRequest(ctx context.Context, path string, perCall http.Header, body []byte, contentType string) (*http.Request, error) {
+	requestURL, err := p.requestURL(path)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	for k, values := range p.headersForCall(perCall) {
+		for _, v := range values {
+			req.Header.Add(k, v)
+		}
+	}
+	req.Header.Set("Content-Type", contentType)
+	if p.generateID != nil {
+		req.Header.Set("x-request-id", p.generateID())
+	}
+	return req, nil
+}
+
 // executeMultipart performs a multipart POST.
 func (p *openaiProvider) executeMultipart(ctx context.Context, path string, perCall http.Header, build func(*multipart.Writer) error) (*httpAPIResponse, error) {
 	if p.err != nil {
 		return nil, p.err
-	}
-	requestURL, err := p.requestURL(path)
-	if err != nil {
-		return nil, err
 	}
 	var lastErr error
 	for attempt := 0; attempt <= p.retry.MaxRetries; attempt++ {
@@ -68,18 +89,9 @@ func (p *openaiProvider) executeMultipart(ctx context.Context, path string, perC
 		if err := writer.Close(); err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body.Bytes()))
+		req, err := p.newMultipartRequest(ctx, path, perCall, body.Bytes(), writer.FormDataContentType())
 		if err != nil {
 			return nil, err
-		}
-		for k, values := range p.headersForCall(perCall) {
-			for _, v := range values {
-				req.Header.Add(k, v)
-			}
-		}
-		req.Header.Set("Content-Type", writer.FormDataContentType())
-		if p.generateID != nil {
-			req.Header.Set("x-request-id", p.generateID())
 		}
 		resp, err := p.fetch.Do(req)
 		if err != nil {
