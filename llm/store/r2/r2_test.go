@@ -1,10 +1,12 @@
 package r2
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/shepard-labs/go-ai-sdk/llm"
@@ -61,6 +63,50 @@ func (f *fakeStorage) Delete(ctx context.Context, objectName string) error {
 	f.deleted = append(f.deleted, objectName)
 	delete(f.objects, objectName)
 	return nil
+}
+
+func (f *fakeStorage) DownloadReader(ctx context.Context, objectName string) (io.ReadCloser, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	content, ok := f.objects[objectName]
+	if !ok {
+		return nil, clientstorage.ErrObjectNotFound
+	}
+	return io.NopCloser(bytes.NewReader(append([]byte(nil), content...))), nil
+}
+
+func (f *fakeStorage) Exists(ctx context.Context, objectName string) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	_, ok := f.objects[objectName]
+	return ok, nil
+}
+
+func (f *fakeStorage) Stat(ctx context.Context, objectName string) (clientstorage.ObjectInfo, error) {
+	if f.err != nil {
+		return clientstorage.ObjectInfo{}, f.err
+	}
+	content, ok := f.objects[objectName]
+	if !ok {
+		return clientstorage.ObjectInfo{}, clientstorage.ErrObjectNotFound
+	}
+	return clientstorage.ObjectInfo{Name: objectName, Size: int64(len(content)), ContentType: f.contentTypes[objectName]}, nil
+}
+
+func (f *fakeStorage) List(ctx context.Context, prefix string) ([]clientstorage.ObjectInfo, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	var out []clientstorage.ObjectInfo
+	for name, content := range f.objects {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		out = append(out, clientstorage.ObjectInfo{Name: name, Size: int64(len(content)), ContentType: f.contentTypes[name]})
+	}
+	return out, nil
 }
 
 func (f *fakeStorage) Close() error { return nil }
