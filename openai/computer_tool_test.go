@@ -116,7 +116,8 @@ func TestResponsesComputerCallDecode(t *testing.T) {
 	if len(checks) != 1 {
 		t.Fatalf("pendingSafetyChecks: %v", input["pendingSafetyChecks"])
 	}
-	if id, _ := call.ProviderMetadata["openai"].(map[string]any)["itemId"]; id != "comp_1" {
+	openaiMeta, ok := call.ProviderMetadata["openai"].(map[string]any)
+	if !ok || openaiMeta["itemId"] != "comp_1" {
 		t.Errorf("itemId: %v", call.ProviderMetadata)
 	}
 }

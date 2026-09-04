@@ -85,7 +85,8 @@ func TestResponsesProgramDecode(t *testing.T) {
 	if input["code"] != `text("hi")` || input["fingerprint"] != "fp_1" {
 		t.Errorf("input: %v", input)
 	}
-	if id, _ := call.ProviderMetadata["openai"].(map[string]any)["itemId"]; id != "pg_1" {
+	openaiMeta, ok := call.ProviderMetadata["openai"].(map[string]any)
+	if !ok || openaiMeta["itemId"] != "pg_1" {
 		t.Errorf("call itemId: %v", call.ProviderMetadata)
 	}
 	if res == nil {
