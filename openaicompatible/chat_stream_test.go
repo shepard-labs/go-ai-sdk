@@ -911,19 +911,26 @@ func TestChatStreamSchemaValidationFailureFinishReasonError(t *testing.T) {
 	p := CreateOpenAICompatible(ProviderSettings{BaseURL: "https://example.test", Name: "acme", Fetch: f, Retry: &RetryOptions{MaxRetries: 0}})
 	result, _ := p.Chat("m").DoStream(context.Background(), StreamOptions{GenerateOptions: GenerateOptions{Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "hello"}}}}}})
 	parts := collectStream(result.Stream)
+	var streamErr *StreamError
 	var finish *StreamFinish
 	for i := range parts {
-		if f, ok := parts[i].(StreamFinish); ok {
-			finish = &f
+		switch p := parts[i].(type) {
+		case StreamError:
+			streamErr = &p
+		case StreamFinish:
+			finish = &p
 		}
 	}
-	if finish == nil {
-		t.Fatal("no StreamFinish")
+	// A stream that ends without any finish_reason is truncated: it must
+	// surface an InvalidResponseDataError and finish as an error, not "other".
+	if streamErr == nil {
+		t.Fatal("no StreamError for stream without finish reason")
 	}
-	// Valid JSON that is a normal chunk (no error field) should succeed, not fail.
-	// The finish reason should be "other" since no explicit finish_reason was given.
-	if finish.FinishReason.Unified != "other" {
-		t.Fatalf("finish reason = %q, want other", finish.FinishReason.Unified)
+	if _, ok := streamErr.Err.(InvalidResponseDataError); !ok {
+		t.Fatalf("error = %T (%v), want InvalidResponseDataError", streamErr.Err, streamErr.Err)
+	}
+	if finish == nil || finish.FinishReason.Unified != "error" {
+		t.Fatalf("finish = %#v, want error", finish)
 	}
 }
 

@@ -71,8 +71,11 @@ func (m *openaiImageModel) doGenerateImages(ctx context.Context, opts ImageGener
 	if opts.Size != "" {
 		body["size"] = opts.Size
 	}
-	if !hasDefaultResponseFormat(m.modelID) {
-		body["response_format"] = "b64_json"
+	// Only send response_format when the caller explicitly requests it via
+	// ProviderOptions["openai"]["responseFormat"]; otherwise omit it and let
+	// the API default apply. Models with a default format ignore the field.
+	if responseFormat, ok := opts.ProviderOptions["openai"]["responseFormat"].(string); ok && responseFormat != "" && !hasDefaultResponseFormat(m.modelID) {
+		body["response_format"] = responseFormat
 	}
 	var warnings []Warning
 	if v, ok := opts.ProviderOptions["openai"]; ok {
@@ -163,8 +166,10 @@ func (m *openaiImageModel) doEdit(ctx context.Context, opts ImageGenerateOptions
 				return err
 			}
 		}
-		if !hasDefaultResponseFormat(m.modelID) {
-			if err := w.WriteField("response_format", "b64_json"); err != nil {
+		// Only send response_format when explicitly requested; models with
+		// a default format ignore the field.
+		if responseFormat, ok := opts.ProviderOptions["openai"]["responseFormat"].(string); ok && responseFormat != "" && !hasDefaultResponseFormat(m.modelID) {
+			if err := w.WriteField("response_format", responseFormat); err != nil {
 				return err
 			}
 		}

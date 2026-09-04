@@ -23,7 +23,7 @@ type chatStreamChoice struct {
 }
 
 type chatStreamDelta struct {
-	Content          string               `json:"content"`
+	Content          json.RawMessage      `json:"content"`
 	ReasoningContent string               `json:"reasoning_content"`
 	Reasoning        string               `json:"reasoning"`
 	ToolCalls        []chatStreamToolCall `json:"tool_calls"`
@@ -194,6 +194,7 @@ func (m *openAICompatibleChatLanguageModel) runChatStream(ctx context.Context, r
 			choice := chunk.Choices[0]
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
 				state.finishReason = finishReasonFromOpenAI(*choice.FinishReason)
+				state.finishSeen = true
 			}
 			m.processChatStreamDelta(parts, state, choice.Delta)
 		}
@@ -205,6 +206,12 @@ func (m *openAICompatibleChatLanguageModel) runChatStream(ctx context.Context, r
 	}
 
 	state.flushStreamState(parts)
+	if !state.finishSeen && state.finishReason.Unified != "error" {
+		// The stream ended without a finish reason: it was truncated,
+		// so it must not be reported as a successful finish.
+		parts <- StreamError{Err: InvalidResponseDataError{Message: "Stream ended without a finish reason."}}
+		state.finishReason = errorFinishReason()
+	}
 	finalMeta := state.buildMetadata(m.provider.name, m.provider.metadataExtractor, streamExtractor, m.provider.convertUsage)
 	parts <- StreamFinish{
 		FinishReason:     state.finishReason,
@@ -218,6 +225,7 @@ type chatStreamState struct {
 	reasoningActive bool
 	textStarted     bool
 	finishReason    FinishReason
+	finishSeen      bool
 	metadataSent    bool
 	toolCalls       map[int]*chatStreamToolState
 	toolCallCount   int
@@ -321,6 +329,8 @@ func (m *openAICompatibleChatLanguageModel) processChatStreamDelta(parts chan<- 
 	if reasoning == "" {
 		reasoning = delta.Reasoning
 	}
+	deltaText, deltaThinking := parseChatContentValue(delta.Content)
+	reasoning += deltaThinking
 
 	if reasoning != "" {
 		if !state.reasoningActive {
@@ -330,7 +340,7 @@ func (m *openAICompatibleChatLanguageModel) processChatStreamDelta(parts chan<- 
 		parts <- StreamReasoningDelta{ID: "reasoning-0", Text: reasoning}
 	}
 
-	if delta.Content != "" {
+	if deltaText != "" {
 		if state.reasoningActive {
 			parts <- StreamReasoningEnd{ID: "reasoning-0"}
 			state.reasoningActive = false
@@ -339,7 +349,7 @@ func (m *openAICompatibleChatLanguageModel) processChatStreamDelta(parts chan<- 
 			state.textStarted = true
 			parts <- StreamTextStart{ID: "txt-0"}
 		}
-		parts <- StreamTextDelta{ID: "txt-0", Text: delta.Content}
+		parts <- StreamTextDelta{ID: "txt-0", Text: deltaText}
 	}
 
 	if len(delta.ToolCalls) > 0 {

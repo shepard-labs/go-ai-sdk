@@ -99,7 +99,7 @@ func (m *openAICompatibleChatLanguageModel) buildChatRequest(opts GenerateOption
 	if responseFormat != nil {
 		body["response_format"] = responseFormat
 	}
-	messages, err := convertChatMessages(opts.Messages)
+	messages, err := convertChatMessages(opts.Messages, metadataKeyForProviderOptions(m.provider.name, providerOptions))
 	if err != nil {
 		return chatRequestConfig{}, err
 	}
@@ -196,7 +196,7 @@ func (m *openAICompatibleChatLanguageModel) chatResponseFormat(opts GenerateOpti
 	return map[string]any{"type": "json_object"}, warnings
 }
 
-func convertChatMessages(messages []Message) ([]map[string]any, error) {
+func convertChatMessages(messages []Message, metadataKey string) ([]map[string]any, error) {
 	converted := make([]map[string]any, 0, len(messages))
 	for _, message := range messages {
 		switch msg := message.(type) {
@@ -212,7 +212,7 @@ func convertChatMessages(messages []Message) ([]map[string]any, error) {
 			}
 			converted = append(converted, out)
 		case AssistantMessage:
-			out, err := convertAssistantMessage(msg)
+			out, err := convertAssistantMessage(msg, metadataKey)
 			if err != nil {
 				return nil, err
 			}
@@ -387,7 +387,7 @@ func textFileData(data any) (string, error) {
 	}
 }
 
-func convertAssistantMessage(msg AssistantMessage) (map[string]any, error) {
+func convertAssistantMessage(msg AssistantMessage, metadataKey string) (map[string]any, error) {
 	out := providerMetadataForPrompt(msg.ProviderOptions)
 	out["role"] = "assistant"
 	var text strings.Builder
@@ -400,7 +400,7 @@ func convertAssistantMessage(msg AssistantMessage) (map[string]any, error) {
 		case ReasoningContent:
 			reasoning.WriteString(part.Text)
 		case ToolCallContent:
-			toolCalls = append(toolCalls, convertAssistantToolCall(part))
+			toolCalls = append(toolCalls, convertAssistantToolCall(part, metadataKey))
 		default:
 			return nil, InvalidPromptError{Message: fmt.Sprintf("unsupported assistant content type %T", content)}
 		}
@@ -421,17 +421,28 @@ func convertAssistantMessage(msg AssistantMessage) (map[string]any, error) {
 	return out, nil
 }
 
-func convertAssistantToolCall(part ToolCallContent) map[string]any {
+func convertAssistantToolCall(part ToolCallContent, metadataKey string) map[string]any {
 	out := providerMetadataForPrompt(part.ProviderOptions)
 	out["id"] = part.ToolCallID
 	out["type"] = "function"
 	out["function"] = map[string]any{"name": part.ToolName, "arguments": string(part.Input)}
-	if google, ok := part.ProviderOptions["google"].(map[string]any); ok {
-		if signature, exists := google["thoughtSignature"]; exists {
-			out["extra_content"] = map[string]any{"google": map[string]any{"thought_signature": fmt.Sprint(signature)}}
-		}
+	signature, found := thoughtSignatureOption(part.ProviderOptions, "google")
+	if !found {
+		signature, found = thoughtSignatureOption(part.ProviderOptions, metadataKey)
+	}
+	if found {
+		out["extra_content"] = map[string]any{"google": map[string]any{"thought_signature": fmt.Sprint(signature)}}
 	}
 	return out
+}
+
+func thoughtSignatureOption(opts ProviderMetadata, key string) (any, bool) {
+	values, ok := opts[key].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	signature, exists := values["thoughtSignature"]
+	return signature, exists
 }
 
 func convertToolMessage(msg ToolMessage) ([]map[string]any, error) {
@@ -559,12 +570,16 @@ func (m *openAICompatibleChatLanguageModel) parseChatResponse(resp *apiResponse,
 
 func chatResponseContent(message chatResponseMessage, metadataKey string, generateID IDGenerator) []Content {
 	var content []Content
-	if message.Content != "" {
-		content = append(content, TextContent{Text: message.Content})
+	text, thinking := parseChatContentValue(message.Content)
+	if text != "" {
+		content = append(content, TextContent{Text: text})
 	}
 	reasoning := message.ReasoningContent
 	if reasoning == "" {
 		reasoning = message.Reasoning
+	}
+	if thinking != "" {
+		reasoning += thinking
 	}
 	if reasoning != "" {
 		content = append(content, ReasoningContent{Text: reasoning})
@@ -646,10 +661,49 @@ type chatChoice struct {
 }
 
 type chatResponseMessage struct {
-	Content          string              `json:"content"`
+	Content          json.RawMessage     `json:"content"`
 	ReasoningContent string              `json:"reasoning_content"`
 	Reasoning        string              `json:"reasoning"`
 	ToolCalls        []chatToolCallShape `json:"tool_calls"`
+}
+
+// parseChatContentValue reads a message or delta content value that may be
+// either a plain string or an array of thinking/text parts. Thinking parts
+// contribute reasoning text, text parts contribute text, and unknown part
+// types are ignored.
+func parseChatContentValue(raw json.RawMessage) (text, thinking string) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", ""
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		return str, ""
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return "", ""
+	}
+	var textBuilder, thinkingBuilder strings.Builder
+	for _, part := range parts {
+		partType, _ := part["type"].(string)
+		switch partType {
+		case "text":
+			if value, _ := part["text"].(string); value != "" {
+				textBuilder.WriteString(value)
+			}
+		case "thinking":
+			value, _ := part["thinking"].(string)
+			if value == "" {
+				value, _ = part["text"].(string)
+			}
+			if value != "" {
+				thinkingBuilder.WriteString(value)
+			}
+		default:
+			// Ignore unknown part types.
+		}
+	}
+	return textBuilder.String(), thinkingBuilder.String()
 }
 
 type chatToolCallShape struct {

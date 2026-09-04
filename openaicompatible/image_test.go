@@ -42,8 +42,11 @@ func TestImageGenerationRequestResponseWarningsAndMetadata(t *testing.T) {
 	if err := json.Unmarshal(result.Request.Body, &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["model"] != "image-model" || body["prompt"] != "draw" || body["n"].(float64) != 2 || body["response_format"] != "b64_json" || body["size"] != "1024x1024" || body["quality"] != "standard" || body["style"] != "vivid" {
+	if body["model"] != "image-model" || body["prompt"] != "draw" || body["n"].(float64) != 2 || body["size"] != "1024x1024" || body["quality"] != "standard" || body["style"] != "vivid" {
 		t.Fatalf("body = %#v", body)
+	}
+	if _, ok := body["response_format"]; ok {
+		t.Fatalf("response_format forced by default: %#v", body)
 	}
 	if result.Request.FormFields != nil {
 		t.Fatalf("form fields = %#v", result.Request.FormFields)

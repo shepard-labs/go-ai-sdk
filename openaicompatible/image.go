@@ -19,6 +19,7 @@ var imageNow = time.Now
 type imageResponse struct {
 	Data []struct {
 		B64JSON string `json:"b64_json"`
+		URL     string `json:"url"`
 	} `json:"data"`
 }
 
@@ -41,10 +42,9 @@ func (m *openAICompatibleImageModel) DoGenerate(ctx context.Context, opts ImageG
 func (m *openAICompatibleImageModel) doGenerateImage(ctx context.Context, opts ImageGenerateOptions) (*ImageGenerateResult, error) {
 	providerOptions := mergeImageProviderOptions(m.provider.name, cloneProviderOptions(opts.ProviderOptions))
 	bodyMap := map[string]any{
-		"model":           m.modelID,
-		"prompt":          opts.Prompt,
-		"n":               opts.N,
-		"response_format": "b64_json",
+		"model":  m.modelID,
+		"prompt": opts.Prompt,
+		"n":      opts.N,
 	}
 	if opts.Size != "" {
 		bodyMap["size"] = opts.Size
@@ -101,7 +101,11 @@ func (m *openAICompatibleImageModel) parseImageResponse(resp *apiResponse, reque
 	}
 	images := make([]string, len(decoded.Data))
 	for i, item := range decoded.Data {
-		images[i] = item.B64JSON
+		if item.B64JSON != "" {
+			images[i] = item.B64JSON
+			continue
+		}
+		images[i] = item.URL
 	}
 	return &ImageGenerateResult{
 		Images:   images,
