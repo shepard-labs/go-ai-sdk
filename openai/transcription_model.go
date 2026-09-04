@@ -21,11 +21,15 @@ func (m *openaiTranscriptionModel) Provider() string { return "openai.transcript
 
 // responseFormatForModel returns the response_format the SDK should inject
 // for this model. whisper-1 + others use verbose_json (which yields
-// segments/words); the gpt-4o transcribe models use json.
+// segments/words); the gpt-4o transcribe models use json; the
+// gpt-4o-transcribe-diarize model uses diarized_json (which yields
+// per-segment speaker labels).
 func responseFormatForModel(modelID string) string {
 	switch modelID {
 	case "gpt-4o-transcribe", "gpt-4o-mini-transcribe":
 		return "json"
+	case "gpt-4o-transcribe-diarize":
+		return "diarized_json"
 	}
 	return "verbose_json"
 }
@@ -75,6 +79,11 @@ func (m *openaiTranscriptionModel) DoGenerate(ctx context.Context, opts Transcri
 				}
 			}
 		}
+		if opts.ChunkingStrategy != nil {
+			if err := w.WriteField("chunking_strategy", *opts.ChunkingStrategy); err != nil {
+				return err
+			}
+		}
 		// Filename derives from MediaType if not explicitly set.
 		filename := opts.Filename
 		if filename == "" {
@@ -92,13 +101,19 @@ func (m *openaiTranscriptionModel) DoGenerate(ctx context.Context, opts Transcri
 	if err != nil {
 		return nil, err
 	}
+	return parseTranscriptionPayload(resp.Body, warnings, m.modelID)
+}
+
+// parseTranscriptionPayload parses a verbose_json transcription payload
+// (also reused by the translation model) into a TranscriptionResult.
+func parseTranscriptionPayload(body []byte, warnings []Warning, modelID string) (*TranscriptionResult, error) {
 	var raw map[string]any
-	if err := json.Unmarshal(resp.Body, &raw); err != nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, InvalidResponseDataError{Message: "failed to parse: " + err.Error()}
 	}
 	result := &TranscriptionResult{
 		Warnings: warnings,
-		Response: ResponseMetadata{Body: resp.Body, ModelID: m.modelID},
+		Response: ResponseMetadata{Body: body, ModelID: modelID},
 	}
 	if text, ok := raw["text"].(string); ok {
 		result.Text = text
@@ -133,6 +148,9 @@ func (m *openaiTranscriptionModel) DoGenerate(ctx context.Context, opts Transcri
 			if end, ok := sm["end"].(float64); ok {
 				seg.EndSecond = end
 			}
+			if speaker, ok := sm["speaker"].(string); ok {
+				seg.Speaker = &speaker
+			}
 			result.Segments = append(result.Segments, seg)
 		}
 	} else if words, ok := raw["words"].([]any); ok {
@@ -151,6 +169,9 @@ func (m *openaiTranscriptionModel) DoGenerate(ctx context.Context, opts Transcri
 			}
 			if end, ok := wm["end"].(float64); ok {
 				seg.EndSecond = end
+			}
+			if speaker, ok := wm["speaker"].(string); ok {
+				seg.Speaker = &speaker
 			}
 			result.Segments = append(result.Segments, seg)
 		}

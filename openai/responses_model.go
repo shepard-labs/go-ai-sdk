@@ -1312,6 +1312,7 @@ func buildResponsesProviderTool(t Tool) (map[string]any, []Warning, error) {
 		for _, mapping := range []struct {
 			wire, key string
 		}{
+			{"action", "action"},
 			{"background", "background"},
 			{"input_fidelity", "inputFidelity"},
 			{"model", "model"},

@@ -399,6 +399,7 @@ type TranscriptionOptions struct {
 	Temperature            *float64
 	TimestampGranularities []string
 	Include                []string
+	ChunkingStrategy       *string
 	Headers                http.Header
 	ProviderOptions        ProviderOptions
 }
@@ -420,6 +421,7 @@ type TranscriptionSegment struct {
 	Text        string
 	StartSecond float64
 	EndSecond   float64
+	Speaker     *string
 }
 
 // ProviderReference maps provider names to opaque server-side identifiers.

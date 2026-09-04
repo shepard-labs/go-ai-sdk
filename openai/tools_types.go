@@ -44,6 +44,7 @@ type FileSearchRanking struct {
 
 // ImageGenerationArgs is the configuration for the image_generation provider tool.
 type ImageGenerationArgs struct {
+	Action            *string            `json:"action,omitempty"`
 	Background        *string            `json:"background,omitempty"`
 	InputFidelity     *string            `json:"inputFidelity,omitempty"`
 	InputImageMask    *ImageGenInputMask `json:"inputImageMask,omitempty"`
