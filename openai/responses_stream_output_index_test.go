@@ -147,7 +147,9 @@ func TestIsChoicesShapedChunk(t *testing.T) {
 		want bool
 	}{
 		{"chat delta chunk", `{"id":"x","choices":[{"delta":{"content":"hi"}}]}`, true},
-		{"chat error chunk", `{"id":"x","choices":[],"error":{"message":"boom"}}`, true},
+		{"chat message chunk", `{"id":"x","choices":[{"message":{"content":"hi"}}]}`, true},
+		{"chat error chunk", `{"id":"x","choices":[],"error":{"message":"boom"}}`, false},
+		{"null choices", `{"id":"x","choices":null}`, false},
 		{"responses event", `{"type":"response.completed","response":{"status":"completed"}}`, false},
 		{"responses delta", `{"type":"response.output_text.delta","delta":"hi"}`, false},
 		{"invalid json", `not json`, false},

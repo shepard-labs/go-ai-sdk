@@ -41,7 +41,9 @@ func ModelCapabilitiesForID(modelID string) Capabilities {
 	lower := strings.ToLower(modelID)
 	family := familyPrefix(lower)
 	gptMajor, gptMinor, isGpt := parseGptVersion(lower)
-	_, isOSeries := parseOSeriesVersion(lower)
+	oVersion, isOSeries := parseOSeriesVersion(lower)
+	isChatLatest := isChatLatestVariant(lower)
+	isNano := strings.Contains(lower, "-nano")
 
 	// Reasoning families, including future anchored versions (gpt-5.7+,
 	// o5+) that familyPrefix doesn't enumerate yet.
@@ -50,23 +52,25 @@ func ModelCapabilitiesForID(modelID string) Capabilities {
 		caps.SystemMessageMode = "developer"
 	}
 
-	// Flex processing.
-	if family == "o3" || family == "o4-mini" || (family == "gpt-5" && !isChatLatestVariant(lower)) ||
-		(family == "gpt-5.6" && !isChatLatestVariant(lower)) {
+	// Flex processing: o-series >= 3, or gpt major >= 5 (including 5.x),
+	// excluding chat-latest variants. There is no nano exclusion, matching
+	// upstream getOpenAILanguageModelCapabilities.
+	if (isOSeries && oVersion >= 3) || (isGpt && gptMajor >= 5 && !isChatLatest) {
 		caps.SupportsFlexProcessing = true
 	}
 
-	// Priority processing.
-	if family == "gpt-4" || family == "o3" || family == "o4-mini" ||
-		(family == "gpt-5" && !isChatLatestVariant(lower) && !isGpt5NanoFamily(lower) && !isGpt54NanoFamily(lower)) ||
-		(family == "gpt-5.6" && !isChatLatestVariant(lower)) {
+	// Priority processing: the gpt-4 family (including gpt-4o), gpt major
+	// >= 5 excluding nano and chat-latest variants, or o-series >= 3.
+	if strings.HasPrefix(lower, "gpt-4") ||
+		(isGpt && gptMajor >= 5 && !isChatLatest && !isNano) ||
+		(isOSeries && oVersion >= 3) {
 		caps.SupportsPriorityProcessing = true
 	}
 
 	// Non-reasoning parameters when reasoning effort is "none".
 	// Anchored on gpt-5.x with minor >= 1 so future versions (gpt-5.7+)
 	// classify the same as the enumerated gpt-5.1..gpt-5.6 families.
-	if isGpt && gptMajor == 5 && gptMinor >= 1 {
+	if isGpt && (gptMajor > 5 || (gptMajor == 5 && gptMinor >= 1)) {
 		caps.SupportsNonReasoningParameters = true
 	}
 
@@ -108,7 +112,7 @@ func MaxCompletionTokensForModel(modelID string) int {
 		"gpt-5.1", "gpt-5.1-2025-11-13", "gpt-5.1-chat-latest",
 		"gpt-5.2", "gpt-5.2-2025-12-11", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11",
 		"gpt-5.3-chat-latest", "gpt-5.4", "gpt-5.5",
-		"		gpt-5.6", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra":
+		"gpt-5.6", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra":
 		return 128000
 	}
 	// Best-effort fallback for future anchored versions (gpt-5.7+, o5+).
@@ -160,18 +164,11 @@ func isChatLatestVariant(lower string) bool {
 		lower == "gpt-5.3-chat-latest"
 }
 
-func isGpt5NanoFamily(lower string) bool {
-	return strings.HasPrefix(lower, "gpt-5-nano")
-}
-
-func isGpt54NanoFamily(lower string) bool {
-	return strings.HasPrefix(lower, "gpt-5.4-nano")
-}
-
 // parseGptVersion parses an anchored "gpt-<major>[.<minor>]" prefix out of
-// a lowercased model ID, ignoring any trailing suffix ("-nano",
-// "-chat-latest", date snapshots). It reports ok=false when the ID isn't
-// gpt-anchored or carries no version digits. All indexing is
+// a lowercased model ID, ignoring any trailing "-suffix" ("-nano",
+// "-chat-latest", date snapshots) — mirroring upstream
+// /^gpt-(\d+)(?:\.(\d+))?(?:-(.+))?$/. Anything else after the version
+// (e.g. "gpt-5x-custom", "gpt-4o") reports ok=false. All indexing is
 // bounds-checked so unrecognized IDs never panic.
 func parseGptVersion(lower string) (major, minor int, ok bool) {
 	rest, found := strings.CutPrefix(lower, "gpt-")
@@ -187,22 +184,30 @@ func parseGptVersion(lower string) (major, minor int, ok bool) {
 	}
 	major, _ = strconv.Atoi(rest[:i])
 	rest = rest[i:]
-	if !strings.HasPrefix(rest, ".") {
+	if rest == "" || rest[0] == '-' {
 		return major, 0, true
+	}
+	if !strings.HasPrefix(rest, ".") {
+		return 0, 0, false
 	}
 	j := 1
 	for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
 		j++
 	}
 	if j == 1 {
-		return major, 0, true
+		return 0, 0, false
 	}
 	minor, _ = strconv.Atoi(rest[1:j])
-	return major, minor, true
+	rest = rest[j:]
+	if rest == "" || rest[0] == '-' {
+		return major, minor, true
+	}
+	return 0, 0, false
 }
 
 // parseOSeriesVersion parses an anchored "o<digits>" prefix (o1, o3-mini,
-// o4-mini, o5, ...) out of a lowercased model ID. Non o-series IDs report
+// o4-mini, o5, ...) out of a lowercased model ID — mirroring upstream
+// /^o(\d+)(?:-|$)/, so "o1x" reports ok=false. Non o-series IDs report
 // ok=false; indexing is bounds-checked so unrecognized IDs never panic.
 func parseOSeriesVersion(lower string) (n int, ok bool) {
 	if !strings.HasPrefix(lower, "o") {
@@ -216,7 +221,11 @@ func parseOSeriesVersion(lower string) (n int, ok bool) {
 	if i == 0 {
 		return 0, false
 	}
-	n, _ = strconv.Atoi(rest[:i])
+	rest = rest[i:]
+	if rest != "" && rest[0] != '-' {
+		return 0, false
+	}
+	n, _ = strconv.Atoi(lower[1 : 1+i])
 	return n, true
 }
 

@@ -19,7 +19,7 @@ func (m *openaiEmbeddingModel) ModelID() string  { return m.modelID }
 func (m *openaiEmbeddingModel) Provider() string { return "openai.embedding" }
 func (m *openaiEmbeddingModel) MaxEmbeddingsPerCall() int {
 	// text-embedding-3-* supports up to 2048; older ada-002 is 2048 too.
-	return 2048
+	return maxEmbeddingsPerCall
 }
 func (m *openaiEmbeddingModel) SupportsParallelCalls() bool { return true }
 
@@ -28,6 +28,10 @@ func (m *openaiEmbeddingModel) SupportsParallelCalls() bool { return true }
 // sequential calls; a single input larger than the budget still goes out
 // alone in its own call (inputs are never split mid-string).
 const embeddingByteBudgetPerCall = 300000
+
+// maxEmbeddingsPerCall caps the number of input values sent in a single
+// embeddings request (mirrors MaxEmbeddingsPerCall).
+const maxEmbeddingsPerCall = 2048
 
 func (m *openaiEmbeddingModel) DoEmbed(ctx context.Context, opts EmbedOptions) (*EmbedResult, error) {
 	if m.provider.err != nil {
@@ -66,8 +70,10 @@ func (m *openaiEmbeddingModel) DoEmbed(ctx context.Context, opts EmbedOptions) (
 	result := &EmbedResult{
 		Embeddings: embeddings,
 		Warnings:   warnings,
-		Request:    RequestMetadata{Body: lastEncoded},
-		Response:   ResponseMetadata{Body: lastBody, ModelID: m.modelID},
+		// Request/Response hold the last chunk's bodies only: the shapes
+		// carry a single body, so earlier chunks' metadata is not retained.
+		Request:  RequestMetadata{Body: lastEncoded},
+		Response: ResponseMetadata{Body: lastBody, ModelID: m.modelID},
 	}
 	if hasUsage {
 		result.Usage = &EmbeddingUsage{Tokens: totalTokens}
@@ -76,14 +82,16 @@ func (m *openaiEmbeddingModel) DoEmbed(ctx context.Context, opts EmbedOptions) (
 }
 
 // chunkEmbedInputs splits values into consecutive groups whose total byte
-// length stays within budget. Order is preserved; a single oversized value
-// occupies its own chunk.
+// length stays within budget and whose size stays within
+// maxEmbeddingsPerCall. Order is preserved; a single oversized value
+// occupies its own chunk. Empty input yields no chunks (the caller is a
+// no-op and makes no request).
 func chunkEmbedInputs(values []string, budget int) [][]string {
 	var chunks [][]string
 	var cur []string
 	curBytes := 0
 	for _, v := range values {
-		if len(cur) > 0 && curBytes+len(v) > budget {
+		if len(cur) > 0 && (curBytes+len(v) > budget || len(cur) >= maxEmbeddingsPerCall) {
 			chunks = append(chunks, cur)
 			cur = nil
 			curBytes = 0
@@ -93,9 +101,6 @@ func chunkEmbedInputs(values []string, budget int) [][]string {
 	}
 	if len(cur) > 0 {
 		chunks = append(chunks, cur)
-	}
-	if len(chunks) == 0 {
-		chunks = [][]string{values}
 	}
 	return chunks
 }

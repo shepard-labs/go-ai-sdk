@@ -91,36 +91,50 @@ type CompactionTrigger struct {
 }
 
 // normalizeCompactionTrigger coerces a provider-options compactionTrigger
-// value (CompactionTrigger, *CompactionTrigger, instructions string, or
-// map with an "instructions" key) into its wire item form.
-func normalizeCompactionTrigger(v any) (map[string]any, bool) {
+// value into its wire item form. Upstream accepts a boolean only
+// (openai-responses-language-model.ts:390): true appends a bare
+// {type:"compaction_trigger"} item, false sends nothing. Struct, string,
+// and map forms are accepted leniently but always emit the bare item —
+// upstream never sends instructions — with an unsupported warning when
+// instructions were supplied.
+func normalizeCompactionTrigger(v any) (map[string]any, []Warning, bool) {
 	item := map[string]any{"type": "compaction_trigger"}
+	instructionsWarning := []Warning{{
+		Type:    "unsupported",
+		Feature: "compactionTrigger",
+		Message: "compaction_trigger instructions are not supported; sending a bare compaction_trigger item",
+	}}
 	switch t := v.(type) {
+	case bool:
+		if !t {
+			return nil, nil, false
+		}
+		return item, nil, true
 	case CompactionTrigger:
 		if t.Instructions != "" {
-			item["instructions"] = t.Instructions
+			return item, instructionsWarning, true
 		}
-		return item, true
+		return item, nil, true
 	case *CompactionTrigger:
 		if t == nil {
-			return nil, false
+			return nil, nil, false
 		}
 		if t.Instructions != "" {
-			item["instructions"] = t.Instructions
+			return item, instructionsWarning, true
 		}
-		return item, true
+		return item, nil, true
 	case string:
 		if t != "" {
-			item["instructions"] = t
+			return item, instructionsWarning, true
 		}
-		return item, true
+		return item, nil, true
 	case map[string]any:
 		if ins, ok := t["instructions"].(string); ok && ins != "" {
-			item["instructions"] = ins
+			return item, instructionsWarning, true
 		}
-		return item, true
+		return item, nil, true
 	}
-	return nil, false
+	return nil, nil, false
 }
 
 // buildResponsesRequest assembles the OpenAI Responses API request body.
@@ -198,6 +212,10 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 	if v, ok := chatOptions["reasoningEffort"].(string); ok && v != "" {
 		reasoning["effort"] = v
 	}
+	// reasoningMode and reasoningContext are genuine upstream options
+	// (openai-responses-language-model-options.ts:269,276), forwarded as
+	// reasoning.mode / reasoning.context
+	// (openai-responses-language-model.ts:519,525).
 	if v, ok := chatOptions["reasoningMode"].(string); ok && v != "" {
 		reasoning["mode"] = v
 	}
@@ -234,8 +252,11 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 	if v, ok := chatOptions["serviceTier"].(string); ok && v != "" {
 		if v == "flex" && !caps.SupportsFlexProcessing {
 			warnings = append(warnings, Warning{Type: "other", Message: "service_tier \"flex\" is not supported on this model"})
-		} else if (v == "priority" || v == "fast") && !caps.SupportsPriorityProcessing {
-			warnings = append(warnings, Warning{Type: "other", Message: "service_tier \"priority\" is not supported on this model"})
+		} else if (v == "priority" || v == "fast" || v == "ultrafast") && !caps.SupportsPriorityProcessing {
+			// ultrafast is access-controlled (upstream narrows availability
+			// to gpt-5.6-sol); gate on the priority capability as the
+			// closest local proxy.
+			warnings = append(warnings, Warning{Type: "other", Message: "service_tier \"" + v + "\" is not supported on this model"})
 		} else {
 			body["service_tier"] = v
 		}
@@ -281,7 +302,7 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 	}
 
 	// Build input items from messages.
-	input, inputWarnings, err := m.convertResponsesInput(opts.Messages, chatOptions, body, hasNativeToolSearch(opts.Tools), opts.Store)
+	input, inputWarnings, err := m.convertResponsesInput(opts.Messages, chatOptions, body, opts.Tools, opts.Store)
 	if err != nil {
 		return nil, warnings, err
 	}
@@ -303,7 +324,9 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 	// A compaction trigger is always terminal: it applies after
 	// store=false filtering so it is the last input item.
 	if v, ok := chatOptions["compactionTrigger"]; ok {
-		if trigger, ok := normalizeCompactionTrigger(v); ok {
+		trigger, triggerWarnings, ok := normalizeCompactionTrigger(v)
+		warnings = append(warnings, triggerWarnings...)
+		if ok {
 			input = append(input, trigger)
 		}
 	}
@@ -831,7 +854,29 @@ func (m *openaiResponsesModel) parseResponsesOutputs(outputs []any) ([]Content, 
 			callID, _ := item["call_id"].(string)
 			id, _ := item["id"].(string)
 			if callID == "" {
-				callID = id
+				// No call id: this is a computer_use tool call, not a
+				// computer call (upstream
+				// openai-responses-language-model.ts maps it to the
+				// computer_use tool with toolCallId=item id and empty
+				// input, plus a synthetic computer_use_tool_result).
+				status, _ := item["status"].(string)
+				out = append(out, ToolCallContent{
+					ToolCallContentEmbed: ToolCallContentEmbed{
+						ToolCallID: id,
+						ToolName:   "computer_use",
+						Input:      json.RawMessage(""),
+					},
+					ProviderExecuted: true,
+				})
+				statusBytes, _ := json.Marshal(map[string]any{"type": "computer_use_tool_result", "status": status})
+				out = append(out, ToolResultContent{
+					ToolResultContent: openaicompatible.ToolResultContent{
+						ToolCallID: id,
+						Output:     ToolResultOutput{Type: "json", Value: statusBytes},
+					},
+					ToolName: "computer_use",
+				})
+				continue
 			}
 			inputBytes, _ := json.Marshal(mapComputerCallInput(item))
 			embed := ToolCallContentEmbed{
@@ -1123,15 +1168,15 @@ func mustJSON(v any) json.RawMessage {
 }
 
 // convertResponsesInput converts a chat-style []Message into a Responses
-// `input` array. It applies the rules in the spec. hasProviderToolSearch
-// reports whether the request declares the native tool_search provider
-// tool; only then does a "tool_search" tool result map to a native
-// tool_search_output item.
-func (m *openaiResponsesModel) convertResponsesInput(messages []Message, chatOptions map[string]any, body map[string]any, hasProviderToolSearch bool, store *bool) ([]any, []Warning, error) {
+// `input` array. It applies the rules in the spec. tools carries the
+// request's declared tools, used to detect the native tool_search and
+// shell provider tools for replay decisions.
+func (m *openaiResponsesModel) convertResponsesInput(messages []Message, chatOptions map[string]any, body map[string]any, tools []Tool, store *bool) ([]any, []Warning, error) {
 	mode := "system"
 	if v, ok := chatOptions["systemMessageMode"].(string); ok && v != "" {
 		mode = v
 	}
+	hasProviderToolSearch := hasNativeToolSearch(tools)
 	var out []any
 	var warnings []Warning
 	for _, msg := range messages {
@@ -1159,7 +1204,7 @@ func (m *openaiResponsesModel) convertResponsesInput(messages []Message, chatOpt
 			}
 			out = append(out, converted)
 		case AssistantMessage:
-			converted, warns, err := m.convertResponsesAssistantMessage(part, store)
+			converted, warns, err := m.convertResponsesAssistantMessage(part, tools, store)
 			warnings = append(warnings, warns...)
 			if err != nil {
 				return nil, warnings, err
@@ -1321,7 +1366,7 @@ func (m *openaiResponsesModel) resolveFileReference(part FileContent) (string, e
 	return ref, nil
 }
 
-func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMessage, store *bool) ([]any, []Warning, error) {
+func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMessage, tools []Tool, store *bool) ([]any, []Warning, error) {
 	var warnings []Warning
 	var out []any
 	for _, content := range msg.Content {
@@ -1372,12 +1417,30 @@ func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMes
 			}
 			out = append(out, item)
 		case ToolCallContent:
+			// Stored items round-trip as references: when the stored
+			// chain supplies the item id, a provider tool call is resent
+			// as an item_reference instead of being reconstructed in
+			// full; full reconstruction happens only when store==false
+			// (upstream convert-to-openai-responses-input.ts: store &&
+			// id → item_reference). Plain client function calls are
+			// never references: the matching function_call_output can
+			// only pair by call_id.
+			if (store == nil || *store) && isStoredProviderItem(part.ToolName, part.ProviderExecuted) {
+				if id := responseItemID(part.ToolCallContentEmbed); id != "" {
+					out = append(out, map[string]any{"type": "item_reference", "id": id})
+					continue
+				}
+			}
 			// With store=false a provider-executed shell call must be
 			// replayed as a native shell_call item: replaying it as a
 			// generic function_call would orphan the paired
 			// shell_call_output on follow-ups.
 			if store != nil && !*store && part.ProviderExecuted && part.ToolName == "shell" {
-				out = append(out, nativeShellCallItem(part))
+				shellItem, shellWarnings, ok := nativeShellCallItem(part, hasShellToolDeclared(tools))
+				warnings = append(warnings, shellWarnings...)
+				if ok {
+					out = append(out, shellItem)
+				}
 				continue
 			}
 			if part.ToolName == "computer" {
@@ -1423,31 +1486,62 @@ func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMes
 }
 
 // nativeShellCallItem replays a provider-executed shell tool call as a
-// native shell_call input item. The call input carries the action payload;
-// the item id round-trips from the top-level or openai-nested provider
-// metadata when present.
-func nativeShellCallItem(part ToolCallContent) map[string]any {
-	item := map[string]any{"type": "shell_call", "call_id": part.ToolCallID}
-	var action any = map[string]any{}
-	if len(part.Input) > 0 && json.Valid(part.Input) {
-		var v any
-		if err := json.Unmarshal(part.Input, &v); err == nil {
-			action = v
-		} else {
-			action = string(part.Input)
-		}
-	} else if len(part.Input) > 0 {
-		action = string(part.Input)
+// native shell_call input item. It requires the shell tool to be declared,
+// the round-tripped item id, and a commands array in the action (upstream
+// shellInputSchema); otherwise it warns and reports ok=false so the call
+// is skipped instead of replayed in a shape the API would reject.
+func nativeShellCallItem(part ToolCallContent, hasShellTool bool) (map[string]any, []Warning, bool) {
+	if !hasShellTool {
+		return nil, []Warning{{Type: "other", Message: "shell tool call replayed without a declared shell tool; skipping"}}, false
 	}
-	item["action"] = action
-	if id, ok := part.ProviderMetadata["itemId"].(string); ok && id != "" {
-		item["id"] = id
-	} else if openaiPM, ok := part.ProviderMetadata["openai"].(map[string]any); ok {
-		if id, ok := openaiPM["itemId"].(string); ok && id != "" {
-			item["id"] = id
+	id := responseItemID(part.ToolCallContentEmbed)
+	if id == "" {
+		return nil, []Warning{{Type: "other", Message: "shell tool call has no item id; skipping"}}, false
+	}
+	var action map[string]any
+	if len(part.Input) > 0 {
+		if err := json.Unmarshal(part.Input, &action); err != nil {
+			return nil, []Warning{{Type: "other", Message: "shell tool call has invalid action JSON; skipping"}}, false
 		}
 	}
-	return item
+	commands, ok := action["commands"].([]any)
+	if !ok || len(commands) == 0 {
+		return nil, []Warning{{Type: "other", Message: "shell tool call action has no commands array; skipping"}}, false
+	}
+	return map[string]any{
+		"type":    "shell_call",
+		"id":      id,
+		"call_id": part.ToolCallID,
+		"status":  "completed",
+		"action":  action,
+	}, nil, true
+}
+
+// isStoredProviderItem reports whether a tool call may round-trip as an
+// item_reference when the stored chain supplies its item id: any
+// provider-executed call, or a call to a provider-defined tool. Plain
+// client function calls are excluded.
+func isStoredProviderItem(toolName string, providerExecuted bool) bool {
+	if providerExecuted {
+		return true
+	}
+	switch toolName {
+	case "shell", "local_shell", "apply_patch", "computer", "programmatic_tool_calling":
+		return true
+	}
+	return false
+}
+
+// hasShellToolDeclared reports whether the request declares the native
+// shell provider tool. Only then is a provider-executed shell call
+// replayed as a native shell_call item.
+func hasShellToolDeclared(tools []Tool) bool {
+	for _, t := range tools {
+		if t.Type == "provider" && t.ID == "openai.shell" {
+			return true
+		}
+	}
+	return false
 }
 
 // responseItemID returns the wire item id round-tripped from a tool
@@ -1549,10 +1643,10 @@ func wireProgramItem(part ToolCallContent) (map[string]any, bool) {
 		"code":        code,
 		"fingerprint": fingerprint,
 	}
+	// The wire id is only the round-tripped item id; never alias call_id
+	// into id when no item id was supplied.
 	if id := responseItemID(part.ToolCallContentEmbed); id != "" {
 		item["id"] = id
-	} else {
-		item["id"] = part.ToolCallID
 	}
 	return item, true
 }
@@ -1624,24 +1718,25 @@ func wireComputerCallOutput(part ToolResultContent) map[string]any {
 }
 
 // wireProgramOutput encodes a programmatic_tool_calling tool result as
-// a program_output input item.
+// a program_output input item. The wire id is only the round-tripped item
+// id; it is omitted when none was supplied (never alias call_id into id).
 func wireProgramOutput(part ToolResultContent) map[string]any {
 	item := map[string]any{
 		"type":    "program_output",
 		"call_id": part.ToolCallID,
 	}
-	id := part.ToolCallID
 	if openaiOpts, ok := part.ProviderOptions["openai"].(map[string]any); ok {
 		if v, ok := openaiOpts["itemId"].(string); ok && v != "" {
-			id = v
+			item["id"] = v
 		}
 	}
-	if openaiMeta, ok := part.ProviderMetadata["openai"].(map[string]any); ok {
-		if v, ok := openaiMeta["itemId"].(string); ok && v != "" {
-			id = v
+	if _, has := item["id"]; !has {
+		if openaiMeta, ok := part.ProviderMetadata["openai"].(map[string]any); ok {
+			if v, ok := openaiMeta["itemId"].(string); ok && v != "" {
+				item["id"] = v
+			}
 		}
 	}
-	item["id"] = id
 	if payload := toolResultJSON(part); payload != nil {
 		if v, ok := payload["result"].(string); ok {
 			item["result"] = v
@@ -1745,10 +1840,14 @@ func (m *openaiResponsesModel) convertResponsesToolMessage(msg ToolMessage, hasP
 	return out, nil
 }
 
-// applyToolResultBreakpoint forwards a breakpoint marker from a scalar
-// tool result's ProviderOptions["openai"]["breakpoint"] onto the wire
-// output item. Non-scalar ("content"-type) results are left untouched.
-// This is passthrough only: no caching behavior is implemented here.
+// applyToolResultBreakpoint forwards a prompt-cache-breakpoint marker from
+// a scalar tool result's ProviderOptions["openai"]["breakpoint"] onto the
+// wire output. Non-scalar ("content"-type) results are left untouched.
+// Upstream (convert-to-openai-responses-input.ts:92) wraps scalar outputs
+// in input_text array form carrying prompt_cache_breakpoint:{mode} instead
+// of a top-level breakpoint field, so a scalar string output is replaced
+// with that array form. This is passthrough only: no caching behavior is
+// implemented here.
 func applyToolResultBreakpoint(item map[string]any, part ToolResultContent) {
 	if part.Output.Type == "content" {
 		return
@@ -1761,7 +1860,15 @@ func applyToolResultBreakpoint(item map[string]any, part ToolResultContent) {
 	if !ok || marker == nil {
 		return
 	}
-	item["breakpoint"] = marker
+	text, ok := item["output"].(string)
+	if !ok {
+		return
+	}
+	item["output"] = []any{map[string]any{
+		"type":                    "input_text",
+		"text":                    text,
+		"prompt_cache_breakpoint": marker,
+	}}
 }
 
 func stringifyToolResult(output ToolResultOutput) any {

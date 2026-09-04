@@ -208,7 +208,9 @@ func (m *openAICompatibleChatLanguageModel) runChatStream(ctx context.Context, r
 	state.flushStreamState(parts)
 	if !state.finishSeen && state.finishReason.Unified != "error" {
 		// The stream ended without a finish reason: it was truncated,
-		// so it must not be reported as a successful finish.
+		// so it must not be reported as a successful finish. Erroring
+		// here is intentional and matches upstream openai-compatible
+		// behavior (vercel/ai d68139c3).
 		parts <- StreamError{Err: InvalidResponseDataError{Message: "Stream ended without a finish reason."}}
 		state.finishReason = errorFinishReason()
 	}
@@ -329,7 +331,9 @@ func (m *openAICompatibleChatLanguageModel) processChatStreamDelta(parts chan<- 
 	if reasoning == "" {
 		reasoning = delta.Reasoning
 	}
-	deltaText, deltaThinking := parseChatContentValue(delta.Content)
+	deltaText, deltaThinking, _ := parseChatContentValue(delta.Content)
+	// Unrecognized delta shapes are dropped: the stream protocol has no
+	// mid-stream warning channel (only the non-streaming parse warns).
 	reasoning += deltaThinking
 
 	if reasoning != "" {

@@ -112,7 +112,9 @@ func TestResponsesProgramDecode(t *testing.T) {
 func TestResponsesProgramRoundTrip(t *testing.T) {
 	callInput, _ := json.Marshal(map[string]any{"code": `text("hi")`, "fingerprint": "fp_1"})
 	respBody := `{"id":"r","model":"gpt-5.6-sol","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`
+	storeFalse := false
 	_, body := runResponsesRaw(t, "gpt-5.6-sol", ResponsesGenerateOptions{
+		Store: &storeFalse,
 		Messages: []Message{
 			UserMessage{Content: []UserContent{TextContent{Text: "hi"}}},
 			AssistantMessage{Content: []AssistantContent{

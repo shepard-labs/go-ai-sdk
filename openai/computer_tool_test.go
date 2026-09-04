@@ -137,7 +137,9 @@ func TestResponsesComputerRoundTrip(t *testing.T) {
 		},
 	}
 	respBody := `{"id":"r","model":"gpt-5.6","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`
+	storeFalse := false
 	_, body := runResponsesRaw(t, "gpt-5.6", ResponsesGenerateOptions{
+		Store: &storeFalse,
 		Messages: []Message{
 			UserMessage{Content: []UserContent{TextContent{Text: "hi"}}},
 			AssistantMessage{Content: []AssistantContent{

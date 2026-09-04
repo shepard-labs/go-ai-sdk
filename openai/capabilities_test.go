@@ -37,6 +37,21 @@ func TestModelCapabilitiesForIDSpecExamples(t *testing.T) {
 	}
 }
 
+// TestCapabilitiesNanoExcludedFromPriority verifies nano variants — present
+// and future — stay excluded from priority processing via the generic
+// "-nano" match.
+func TestCapabilitiesNanoExcludedFromPriority(t *testing.T) {
+	for _, modelID := range []string{"gpt-5-nano", "gpt-5.4-nano", "gpt-5.6-nano", "gpt-5.7-nano", "GPT-5.6-NANO"} {
+		caps := ModelCapabilitiesForID(modelID)
+		if !caps.IsReasoningModel {
+			t.Errorf("%s: IsReasoningModel should be true", modelID)
+		}
+		if caps.SupportsPriorityProcessing {
+			t.Errorf("%s: SupportsPriorityProcessing should be false", modelID)
+		}
+	}
+}
+
 func TestMaxCompletionTokensForModel(t *testing.T) {
 	if got := MaxCompletionTokensForModel("o1"); got != 100000 {
 		t.Errorf("o1: got %d", got)

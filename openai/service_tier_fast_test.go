@@ -79,11 +79,11 @@ func TestResponsesServiceTierFast(t *testing.T) {
 // TestResponsesServiceTierFastUnsupported verifies service_tier "fast" is
 // stripped with a warning on models without priority processing.
 func TestResponsesServiceTierFastUnsupported(t *testing.T) {
-	body, warnings := runResponsesWithServiceTier(t, "gpt-4o-mini", "fast")
+	body, warnings := runResponsesWithServiceTier(t, "gpt-3.5-turbo", "fast")
 	if _, has := body["service_tier"]; has {
-		t.Errorf("service_tier should be stripped on gpt-4o-mini: %v", body["service_tier"])
+		t.Errorf("service_tier should be stripped on gpt-3.5-turbo: %v", body["service_tier"])
 	}
 	if len(warnings) == 0 {
-		t.Error("expected a service_tier warning on gpt-4o-mini")
+		t.Error("expected a service_tier warning on gpt-3.5-turbo")
 	}
 }

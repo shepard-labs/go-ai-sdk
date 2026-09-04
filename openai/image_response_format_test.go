@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestImageGenerationsOmitsResponseFormatByDefault(t *testing.T) {
+func TestImageGenerationsSendsB64JSONByDefault(t *testing.T) {
 	f := &recordingFetcher{responses: []*http.Response{response(200, `{"data":[]}`)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Image("dall-e-3").DoGenerate(context.Background(), ImageGenerateOptions{Prompt: "x"})
@@ -15,8 +15,8 @@ func TestImageGenerationsOmitsResponseFormatByDefault(t *testing.T) {
 		t.Fatalf("DoGenerate: %v", err)
 	}
 	body := decodeRequestBody(t, result.Request.Body)
-	if _, ok := body["response_format"]; ok {
-		t.Errorf("response_format should be omitted by default: %#v", body)
+	if body["response_format"] != "b64_json" {
+		t.Errorf("response_format = %v, want b64_json default: %#v", body["response_format"], body)
 	}
 }
 

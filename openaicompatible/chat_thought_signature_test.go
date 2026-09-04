@@ -9,8 +9,13 @@ import (
 
 func assistantWithThoughtSignature(t *testing.T, requestOptions ProviderOptions, toolOptions ProviderMetadata) map[string]any {
 	t.Helper()
+	return assistantWithThoughtSignatureAs(t, "acme-provider", requestOptions, toolOptions)
+}
+
+func assistantWithThoughtSignatureAs(t *testing.T, name string, requestOptions ProviderOptions, toolOptions ProviderMetadata) map[string]any {
+	t.Helper()
 	f := &recordingFetcher{responses: []*http.Response{response(200, `{"choices":[{"message":{"content":"ok"}}]}`)}}
-	p := CreateOpenAICompatible(ProviderSettings{BaseURL: "https://example.test", Name: "acme-provider", Fetch: f, Retry: &RetryOptions{MaxRetries: 0}})
+	p := CreateOpenAICompatible(ProviderSettings{BaseURL: "https://example.test", Name: name, Fetch: f, Retry: &RetryOptions{MaxRetries: 0}})
 	_, err := p.Chat("m").DoGenerate(context.Background(), GenerateOptions{
 		Messages: []Message{AssistantMessage{Content: []AssistantContent{
 			ToolCallContent{ToolCallID: "call-1", ToolName: "weather", Input: json.RawMessage(`{}`), ProviderOptions: toolOptions},
@@ -51,8 +56,8 @@ func TestAssistantToolCallThoughtSignatureFromGoogleKey(t *testing.T) {
 
 func TestAssistantToolCallThoughtSignatureFallsBackToProviderKey(t *testing.T) {
 	toolCall := assistantWithThoughtSignature(t, nil, ProviderMetadata{"acme-provider": map[string]any{"thoughtSignature": "sig-provider"}})
-	if got := thoughtSignatureFromWire(t, toolCall); got != "sig-provider" {
-		t.Fatalf("thought_signature = %q, want sig-provider", got)
+	if _, ok := toolCall["extra_content"]; ok {
+		t.Fatalf("extra_content should not be emitted for foreign namespace: %#v", toolCall)
 	}
 }
 
@@ -70,7 +75,45 @@ func TestAssistantToolCallThoughtSignatureCamelCaseProviderKey(t *testing.T) {
 	toolCall := assistantWithThoughtSignature(t,
 		ProviderOptions{"acmeProvider": map[string]any{}},
 		ProviderMetadata{"acmeProvider": map[string]any{"thoughtSignature": "sig-camel"}})
-	if got := thoughtSignatureFromWire(t, toolCall); got != "sig-camel" {
-		t.Fatalf("thought_signature = %q, want sig-camel", got)
+	if _, ok := toolCall["extra_content"]; ok {
+		t.Fatalf("extra_content should not be emitted for foreign namespace: %#v", toolCall)
+	}
+}
+
+func TestGoogleProviderKeyPrefix(t *testing.T) {
+	cases := []struct {
+		key  string
+		want bool
+	}{
+		{"google", true},
+		{"Google", true},
+		{"google-vertex", true},
+		{"google_vertex", true},
+		{"googleevil", false},
+		{"googleevil-vertex", false},
+		{"goog", false},
+		{"acme-provider", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := isGoogleProviderKey(c.key); got != c.want {
+			t.Errorf("isGoogleProviderKey(%q) = %v, want %v", c.key, got, c.want)
+		}
+	}
+}
+
+func TestThoughtSignatureSpoofedProviderKeyRejected(t *testing.T) {
+	toolCall := assistantWithThoughtSignatureAs(t, "googleevil", nil,
+		ProviderMetadata{"googleevil": map[string]any{"thoughtSignature": "sig-spoof"}})
+	if _, ok := toolCall["extra_content"]; ok {
+		t.Fatalf("extra_content should not be emitted for spoofed provider key: %#v", toolCall)
+	}
+}
+
+func TestThoughtSignatureDashProviderKeyAccepted(t *testing.T) {
+	toolCall := assistantWithThoughtSignatureAs(t, "google-vertex", nil,
+		ProviderMetadata{"google-vertex": map[string]any{"thoughtSignature": "sig-vertex"}})
+	if got := thoughtSignatureFromWire(t, toolCall); got != "sig-vertex" {
+		t.Fatalf("thought_signature = %q, want sig-vertex", got)
 	}
 }

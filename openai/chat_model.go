@@ -180,8 +180,11 @@ func (m *openaiChatLanguageModel) buildChatRequest(opts GenerateOptions) (chatRe
 		if tier != "" {
 			if tier == "flex" && !caps.SupportsFlexProcessing {
 				warnings = append(warnings, Warning{Type: "other", Message: "service_tier \"flex\" is not supported on this model"})
-			} else if (tier == "priority" || tier == "fast") && !caps.SupportsPriorityProcessing {
-				warnings = append(warnings, Warning{Type: "other", Message: "service_tier \"priority\" is not supported on this model"})
+			} else if (tier == "priority" || tier == "fast" || tier == "ultrafast") && !caps.SupportsPriorityProcessing {
+				// ultrafast is access-controlled (upstream narrows availability
+				// to gpt-5.6-sol); gate on the priority capability as the
+				// closest local proxy.
+				warnings = append(warnings, Warning{Type: "other", Message: "service_tier \"" + tier + "\" is not supported on this model"})
 			} else {
 				body["service_tier"] = tier
 			}

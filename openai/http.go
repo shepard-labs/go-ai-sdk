@@ -51,11 +51,18 @@ func (p *openaiProvider) executeStream(ctx context.Context, path string, body []
 // executeMultipart and the streaming multipart path so header handling
 // (auth spread, content type, request ID) stays identical.
 func (p *openaiProvider) newMultipartRequest(ctx context.Context, path string, perCall http.Header, body []byte, contentType string) (*http.Request, error) {
+	return p.newMultipartStreamRequest(ctx, path, perCall, bytes.NewReader(body), contentType)
+}
+
+// newMultipartStreamRequest builds a multipart POST request for
+// {baseURL}{path} with a streaming body (chunked encoding, no
+// Content-Length). Header handling matches newMultipartRequest.
+func (p *openaiProvider) newMultipartStreamRequest(ctx context.Context, path string, perCall http.Header, body io.Reader, contentType string) (*http.Request, error) {
 	requestURL, err := p.requestURL(path)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, body)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +76,31 @@ func (p *openaiProvider) newMultipartRequest(ctx context.Context, path string, p
 		req.Header.Set("x-request-id", p.generateID())
 	}
 	return req, nil
+}
+
+// executeMultipartReader performs a multipart POST with a streaming
+// (non-replayable) body and returns the buffered response. Unlike
+// executeMultipart it does not buffer the body and does not retry: a pipe
+// body can only be consumed once.
+func (p *openaiProvider) executeMultipartReader(ctx context.Context, path string, perCall http.Header, body io.Reader, contentType string) (*httpAPIResponse, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	req, err := p.newMultipartStreamRequest(ctx, path, perCall, body, contentType)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := p.fetch.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, p.readAPIError(resp)
+	}
+	return p.readResponse(resp)
 }
 
 // executeMultipart performs a multipart POST.

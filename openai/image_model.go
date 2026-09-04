@@ -88,10 +88,15 @@ func gptImageVersion(modelID string) (major int, ok bool) {
 }
 
 // isGptImageFamily reports anchored gpt-image-<version> membership, so
-// future versions (gpt-image-3+) classify the same as current ones.
+// future versions (gpt-image-3+) classify the same as current ones. The
+// chatgpt-image-* models share the gpt-image API surface (and the default
+// b64_json response format in hasDefaultResponseFormat), so they classify
+// here too.
 func isGptImageFamily(modelID string) bool {
-	_, ok := gptImageVersion(modelID)
-	return ok
+	if _, ok := gptImageVersion(modelID); ok {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(modelID), "chatgpt-image-")
 }
 
 func (m *openaiImageModel) doGenerateImages(ctx context.Context, opts ImageGenerateOptions) (*ImageGenerateResult, error) {
@@ -103,10 +108,16 @@ func (m *openaiImageModel) doGenerateImages(ctx context.Context, opts ImageGener
 	if opts.Size != "" {
 		body["size"] = opts.Size
 	}
-	// Only send response_format when the caller explicitly requests it via
-	// ProviderOptions["openai"]["responseFormat"]; otherwise omit it and let
-	// the API default apply. Models with a default format ignore the field.
-	if responseFormat, ok := opts.ProviderOptions["openai"]["responseFormat"].(string); ok && responseFormat != "" && !hasDefaultResponseFormat(m.modelID) {
+	// Models without a default format return URLs unless response_format is
+	// sent, which would silently flip Images[] from base64 to URLs; default
+	// to b64_json (conscious deviation from omitting the field) and let an
+	// explicit responseFormat:"url" provider option opt into URL responses.
+	// Models with a default format ignore the field, so it is omitted.
+	if !hasDefaultResponseFormat(m.modelID) {
+		responseFormat := "b64_json"
+		if v, ok := opts.ProviderOptions["openai"]["responseFormat"].(string); ok && v != "" {
+			responseFormat = v
+		}
 		body["response_format"] = responseFormat
 	}
 	var warnings []Warning
@@ -198,9 +209,13 @@ func (m *openaiImageModel) doEdit(ctx context.Context, opts ImageGenerateOptions
 				return err
 			}
 		}
-		// Only send response_format when explicitly requested; models with
-		// a default format ignore the field.
-		if responseFormat, ok := opts.ProviderOptions["openai"]["responseFormat"].(string); ok && responseFormat != "" && !hasDefaultResponseFormat(m.modelID) {
+		// Models without a default format default to b64_json (see
+		// doGenerateImages); models with a default format ignore the field.
+		if !hasDefaultResponseFormat(m.modelID) {
+			responseFormat := "b64_json"
+			if v, ok := opts.ProviderOptions["openai"]["responseFormat"].(string); ok && v != "" {
+				responseFormat = v
+			}
 			if err := w.WriteField("response_format", responseFormat); err != nil {
 				return err
 			}

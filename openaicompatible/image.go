@@ -41,6 +41,7 @@ func (m *openAICompatibleImageModel) DoGenerate(ctx context.Context, opts ImageG
 
 func (m *openAICompatibleImageModel) doGenerateImage(ctx context.Context, opts ImageGenerateOptions) (*ImageGenerateResult, error) {
 	providerOptions := mergeImageProviderOptions(m.provider.name, cloneProviderOptions(opts.ProviderOptions))
+	applyDefaultImageResponseFormat(providerOptions)
 	bodyMap := map[string]any{
 		"model":  m.modelID,
 		"prompt": opts.Prompt,
@@ -128,6 +129,22 @@ func imageWarnings(opts ImageGenerateOptions) []Warning {
 
 type imageField struct{ name, value string }
 
+// applyDefaultImageResponseFormat normalizes the image response-format
+// opt-in (camelCase responseFormat → response_format) and defaults to
+// b64_json: omitting response_format lets the server fall back to URLs,
+// which would silently flip Images[] from base64 to URLs (conscious
+// deviation from omitting the field). An explicit responseFormat:"url"
+// provider option (or a response_format key) opts into URL responses.
+func applyDefaultImageResponseFormat(providerOptions map[string]any) {
+	if v, ok := providerOptions["responseFormat"]; ok {
+		providerOptions["response_format"] = v
+		delete(providerOptions, "responseFormat")
+	}
+	if _, ok := providerOptions["response_format"]; !ok {
+		providerOptions["response_format"] = "b64_json"
+	}
+}
+
 func imageEditFields(modelID string, opts ImageGenerateOptions, providerOptions map[string]any) ([]imageField, map[string][]string, error) {
 	var fields []imageField
 	formFields := map[string][]string{}
@@ -143,6 +160,7 @@ func imageEditFields(modelID string, opts ImageGenerateOptions, providerOptions 
 	if opts.Size != "" {
 		add("size", opts.Size)
 	}
+	applyDefaultImageResponseFormat(providerOptions)
 	for k, v := range providerOptions {
 		value, ok, err := formFieldValue(v)
 		if err != nil {

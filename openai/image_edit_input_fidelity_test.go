@@ -66,10 +66,10 @@ func TestBuildImageRequestForGPTImageOmitsResponseFormat(t *testing.T) {
 	}
 }
 
-// TestBuildImageRequestForDallE3OmitsResponseFormatByDefault verifies that
-// response_format is only sent when explicitly requested via the
-// responseFormat provider option; by default it is omitted.
-func TestBuildImageRequestForDallE3OmitsResponseFormatByDefault(t *testing.T) {
+// TestBuildImageRequestForDallE3DefaultsB64JSON verifies that dall-e-3
+// sends response_format b64_json by default; an explicit responseFormat
+// provider option is the only way to opt into URL responses.
+func TestBuildImageRequestForDallE3DefaultsB64JSON(t *testing.T) {
 	f := &multipartCapturingFetcher{}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	_, err := p.Image("dall-e-3").DoGenerate(context.Background(), ImageGenerateOptions{
@@ -78,8 +78,8 @@ func TestBuildImageRequestForDallE3OmitsResponseFormatByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoGenerate: %v", err)
 	}
-	if strings.Contains(f.captured, "response_format") {
-		t.Errorf("response_format should not be in dall-e-3 body by default: %q", f.captured)
+	if !strings.Contains(f.captured, `"response_format":"b64_json"`) {
+		t.Errorf("response_format b64_json default missing from dall-e-3 body: %q", f.captured)
 	}
 }
 

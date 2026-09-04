@@ -86,8 +86,8 @@ func TestEmbeddingSmallBatchSingleCall(t *testing.T) {
 
 // TestChunkEmbedInputsBoundaries verifies chunk boundary behavior directly.
 func TestChunkEmbedInputsBoundaries(t *testing.T) {
-	if got := chunkEmbedInputs(nil, 10); len(got) != 1 {
-		t.Errorf("empty input: %d chunks, want 1", len(got))
+	if got := chunkEmbedInputs(nil, 10); len(got) != 0 {
+		t.Errorf("empty input: %d chunks, want 0", len(got))
 	}
 	if got := chunkEmbedInputs([]string{"ab", "cd"}, 4); len(got) != 1 {
 		t.Errorf("exact fit: %d chunks, want 1", len(got))

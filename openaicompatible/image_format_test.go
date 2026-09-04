@@ -24,7 +24,7 @@ func TestImageGenerationParsesURLResponses(t *testing.T) {
 	}
 }
 
-func TestImageGenerationOmitsResponseFormatByDefault(t *testing.T) {
+func TestImageGenerationDefaultsB64JSONResponseFormat(t *testing.T) {
 	f := &recordingFetcher{responses: []*http.Response{response(200, `{"data":[]}`)}}
 	p := CreateOpenAICompatible(ProviderSettings{BaseURL: "https://example.test", Name: "acme", Fetch: f, Retry: &RetryOptions{MaxRetries: 0}})
 	result, err := p.Image("image-model").DoGenerate(context.Background(), ImageGenerateOptions{Prompt: "draw"})
@@ -32,8 +32,8 @@ func TestImageGenerationOmitsResponseFormatByDefault(t *testing.T) {
 		t.Fatalf("DoGenerate error = %v", err)
 	}
 	body := decodeRequestBody(t, result.Request.Body)
-	if _, ok := body["response_format"]; ok {
-		t.Fatalf("response_format sent by default: %#v", body)
+	if body["response_format"] != "b64_json" {
+		t.Fatalf("response_format = %#v, want b64_json default", body["response_format"])
 	}
 }
 

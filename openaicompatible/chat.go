@@ -427,7 +427,7 @@ func convertAssistantToolCall(part ToolCallContent, metadataKey string) map[stri
 	out["type"] = "function"
 	out["function"] = map[string]any{"name": part.ToolName, "arguments": string(part.Input)}
 	signature, found := thoughtSignatureOption(part.ProviderOptions, "google")
-	if !found {
+	if !found && isGoogleProviderKey(metadataKey) {
 		signature, found = thoughtSignatureOption(part.ProviderOptions, metadataKey)
 	}
 	if found {
@@ -443,6 +443,16 @@ func thoughtSignatureOption(opts ProviderMetadata, key string) (any, bool) {
 	}
 	signature, exists := values["thoughtSignature"]
 	return signature, exists
+}
+
+// isGoogleProviderKey reports whether a provider-options namespace belongs
+// to Google's compatible surface. Only the google key itself — or a
+// google-compatible provider namespace delimited by "-" or "_" — may be
+// re-emitted as Google wire metadata; foreign namespaces (including
+// spoofed prefixes like "googleevil") must not be re-keyed into it.
+func isGoogleProviderKey(key string) bool {
+	lower := strings.ToLower(key)
+	return lower == "google" || strings.HasPrefix(lower, "google-") || strings.HasPrefix(lower, "google_")
 }
 
 func convertToolMessage(msg ToolMessage) ([]map[string]any, error) {
@@ -553,13 +563,14 @@ func (m *openAICompatibleChatLanguageModel) parseChatResponse(resp *apiResponse,
 	if len(decoded.Choices) > 0 {
 		choice = decoded.Choices[0]
 	}
-	content := chatResponseContent(choice.Message, metadataKeyForProviderOptions(m.provider.name, providerOptions), m.provider.generateID)
+	content, contentWarnings := chatResponseContent(choice.Message, metadataKeyForProviderOptions(m.provider.name, providerOptions), m.provider.generateID)
 	convertedUsage := defaultChatUsage(usage)
 	if usage != nil && m.provider.convertUsage != nil {
 		convertedUsage = m.provider.convertUsage(*usage)
 	}
 	return &GenerateResult{
 		Content:          content,
+		Warnings:         contentWarnings,
 		FinishReason:     finishReasonFromOpenAI(choice.FinishReason),
 		Usage:            convertedUsage,
 		ProviderMetadata: metadata,
@@ -568,9 +579,13 @@ func (m *openAICompatibleChatLanguageModel) parseChatResponse(resp *apiResponse,
 	}, nil
 }
 
-func chatResponseContent(message chatResponseMessage, metadataKey string, generateID IDGenerator) []Content {
+func chatResponseContent(message chatResponseMessage, metadataKey string, generateID IDGenerator) ([]Content, []Warning) {
 	var content []Content
-	text, thinking := parseChatContentValue(message.Content)
+	var warnings []Warning
+	text, thinking, unrecognized := parseChatContentValue(message.Content)
+	if unrecognized {
+		warnings = append(warnings, Warning{Type: "other", Feature: "responseContent", Details: "Unrecognized message content shape was dropped."})
+	}
 	if text != "" {
 		content = append(content, TextContent{Text: text})
 	}
@@ -595,7 +610,7 @@ func chatResponseContent(message chatResponseMessage, metadataKey string, genera
 		}
 		content = append(content, ToolCallContent{ToolCallID: id, ToolName: toolCall.Function.Name, Input: json.RawMessage(toolCall.Function.Arguments), ProviderMetadata: providerMetadata})
 	}
-	return content
+	return content, warnings
 }
 
 func mergeProviderMetadata(dst, src ProviderMetadata) {
@@ -669,19 +684,20 @@ type chatResponseMessage struct {
 
 // parseChatContentValue reads a message or delta content value that may be
 // either a plain string or an array of thinking/text parts. Thinking parts
-// contribute reasoning text, text parts contribute text, and unknown part
-// types are ignored.
-func parseChatContentValue(raw json.RawMessage) (text, thinking string) {
+// contribute reasoning text, text parts contribute text. Shapes that are
+// neither (nor a null/empty payload) and unknown part types report
+// unrecognized=true so callers can warn instead of silently dropping them.
+func parseChatContentValue(raw json.RawMessage) (text, thinking string, unrecognized bool) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return "", ""
+		return "", "", false
 	}
 	var str string
 	if err := json.Unmarshal(raw, &str); err == nil {
-		return str, ""
+		return str, "", false
 	}
 	var parts []map[string]any
 	if err := json.Unmarshal(raw, &parts); err != nil {
-		return "", ""
+		return "", "", true
 	}
 	var textBuilder, thinkingBuilder strings.Builder
 	for _, part := range parts {
@@ -700,10 +716,11 @@ func parseChatContentValue(raw json.RawMessage) (text, thinking string) {
 				thinkingBuilder.WriteString(value)
 			}
 		default:
-			// Ignore unknown part types.
+			// Unknown part types are dropped with a warning, not silently.
+			unrecognized = true
 		}
 	}
-	return textBuilder.String(), thinkingBuilder.String()
+	return textBuilder.String(), thinkingBuilder.String(), unrecognized
 }
 
 type chatToolCallShape struct {

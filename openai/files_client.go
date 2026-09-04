@@ -19,19 +19,7 @@ func (c *openaiFilesClient) UploadFile(ctx context.Context, opts FilesUploadOpti
 	if c.provider.err != nil {
 		return nil, c.provider.err
 	}
-	purpose := "assistants"
-	var expiresAfterSeconds *int
-	if v, ok := opts.ProviderOptions["openai"]; ok {
-		if p, ok := v["purpose"].(string); ok && p != "" {
-			purpose = p
-		}
-		if e, ok := v["expiresAfter"].(float64); ok {
-			secs := int(e)
-			expiresAfterSeconds = &secs
-		} else if e, ok := v["expiresAfter"].(int); ok {
-			expiresAfterSeconds = &e
-		}
-	}
+	purpose, expiresAfterSeconds := filesUploadFields(opts.ProviderOptions)
 	build := func(w *multipart.Writer) error {
 		if err := w.WriteField("purpose", purpose); err != nil {
 			return err
@@ -66,23 +54,111 @@ func (c *openaiFilesClient) UploadFile(ctx context.Context, opts FilesUploadOpti
 	return mapFilesResponse(raw, opts.Filename, opts.MediaType), nil
 }
 
-// Upload reads the full content from r and delegates to UploadFile so both
-// paths share the same multipart encoding (purpose default, expires_after
-// brackets, filename fallback).
+// copyWithContext copies src to dst in chunks, aborting promptly when ctx
+// is done so a cancelled Upload never leaves the pipe writer blocked
+// forever. A blocked pipe write already fails once the pipe is closed
+// with the ctx error; this covers the copy itself between chunks.
+func copyWithContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
+	buf := make([]byte, 32*1024)
+	var total int64
+	for {
+		select {
+		case <-ctx.Done():
+			return total, ctx.Err()
+		default:
+		}
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return total, werr
+			}
+			total += int64(n)
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return total, nil
+			}
+			return total, rerr
+		}
+	}
+}
+
+// filesUploadFields extracts the shared upload form fields (purpose
+// default, expires_after brackets) from provider options.
+func filesUploadFields(providerOptions ProviderOptions) (string, *int) {
+	purpose := "assistants"
+	var expiresAfterSeconds *int
+	if v, ok := providerOptions["openai"]; ok {
+		if p, ok := v["purpose"].(string); ok && p != "" {
+			purpose = p
+		}
+		if e, ok := v["expiresAfter"].(float64); ok {
+			secs := int(e)
+			expiresAfterSeconds = &secs
+		} else if e, ok := v["expiresAfter"].(int); ok {
+			expiresAfterSeconds = &e
+		}
+	}
+	return purpose, expiresAfterSeconds
+}
+
+// Upload streams the multipart body via io.Pipe (chunked, no full
+// buffering of the reader) and maps the response through the same shape
+// as UploadFile. The UploadFile path stays fully buffered (and retryable);
+// the streamed body here can only be consumed once, so it is not retried.
 func (c *openaiFilesClient) Upload(ctx context.Context, r io.Reader, filename, mediaType string, providerOptions ProviderOptions) (*FilesUploadResult, error) {
 	if c.provider.err != nil {
 		return nil, c.provider.err
 	}
-	data, err := io.ReadAll(r)
+	purpose, expiresAfterSeconds := filesUploadFields(providerOptions)
+	if filename == "" {
+		filename = "file"
+	}
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+	// Abort the pipe if ctx is cancelled while the writer is blocked on
+	// it (e.g. fetch failed early and no one drains pr anymore), so the
+	// writer goroutine below never blocks forever.
+	stopWatch := context.AfterFunc(ctx, func() {
+		_ = pw.CloseWithError(ctx.Err())
+	})
+	defer stopWatch()
+	go func() {
+		err := func() error {
+			if err := writer.WriteField("purpose", purpose); err != nil {
+				return err
+			}
+			if expiresAfterSeconds != nil {
+				if err := writer.WriteField("expires_after[anchor]", "created_at"); err != nil {
+					return err
+				}
+				if err := writer.WriteField("expires_after[seconds]", strconv.Itoa(*expiresAfterSeconds)); err != nil {
+					return err
+				}
+			}
+			part, err := writer.CreateFormFile("file", filename)
+			if err != nil {
+				return err
+			}
+			if _, err := copyWithContext(ctx, part, r); err != nil {
+				return err
+			}
+			return writer.Close()
+		}()
+		_ = pw.CloseWithError(err)
+	}()
+	resp, err := c.provider.executeMultipartReader(ctx, endpointFiles, nil, pr, writer.FormDataContentType())
 	if err != nil {
+		// No one will drain pr now; release a writer blocked on the pipe
+		// so it terminates instead of leaking.
+		_ = pr.CloseWithError(err)
 		return nil, err
 	}
-	return c.UploadFile(ctx, FilesUploadOptions{
-		Data:            data,
-		MediaType:       mediaType,
-		Filename:        filename,
-		ProviderOptions: providerOptions,
-	})
+	var raw filesAPIResponse
+	if err := json.Unmarshal(resp.Body, &raw); err != nil {
+		return nil, InvalidResponseDataError{Message: "failed to parse files response: " + err.Error()}
+	}
+	return mapFilesResponse(raw, filename, mediaType), nil
 }
 
 // GetFileMetadata retrieves a file object (GET /files/{id}). The response

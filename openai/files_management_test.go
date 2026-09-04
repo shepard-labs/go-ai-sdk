@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // filesTestServer spins up an httptest server that records the last request
@@ -209,5 +210,31 @@ func TestFilesEmptyIDRejected(t *testing.T) {
 	}
 	if f.calls != 0 {
 		t.Errorf("calls = %d, want 0", f.calls)
+	}
+}
+
+// TestFilesUploadCancelledContextReturnsPromptly verifies the streaming
+// Upload path does not hang when the context is cancelled: the pipe writer
+// observes ctx.Done and the reader side is released on early fetch failure.
+func TestFilesUploadCancelledContextReturnsPromptly(t *testing.T) {
+	fts := newFilesTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"file-cancelled","object":"file"}`))
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := filesTestProvider(fts).Files().Upload(
+			ctx, strings.NewReader("payload"), "note.txt", "text/plain", nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Upload with cancelled context should error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Upload with cancelled context hung")
 	}
 }

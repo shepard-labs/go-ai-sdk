@@ -337,7 +337,7 @@ func TestResponsesStoreFalseReplaysShellCallNatively(t *testing.T) {
 				ToolCallContentEmbed: ToolCallContentEmbed{
 					ToolCallID: "sc-call",
 					ToolName:   "shell",
-					Input:      []byte(`{"command":["ls"],"container_id":"c-1"}`),
+					Input:      []byte(`{"commands":["ls"],"timeout_ms":1000}`),
 					ProviderMetadata: ProviderMetadata{
 						"openai": map[string]any{"itemId": "sc-1"},
 					},
@@ -349,6 +349,7 @@ func TestResponsesStoreFalseReplaysShellCallNatively(t *testing.T) {
 				ToolName:          "shell",
 			}}},
 		},
+		Tools: []Tool{Shell(ShellArgs{})},
 	})
 	if err != nil {
 		t.Fatalf("DoGenerate: %v", err)
@@ -370,8 +371,12 @@ func TestResponsesStoreFalseReplaysShellCallNatively(t *testing.T) {
 			if m["id"] != "sc-1" {
 				t.Errorf("shell_call id = %v (itemId should round-trip)", m["id"])
 			}
+			if m["status"] != "completed" {
+				t.Errorf("shell_call status = %v", m["status"])
+			}
 			action, _ := m["action"].(map[string]any)
-			if action["container_id"] != "c-1" {
+			commands, _ := action["commands"].([]any)
+			if len(commands) != 1 || commands[0] != "ls" {
 				t.Errorf("shell_call action = %v", m["action"])
 			}
 		case "shell_call_output":
@@ -404,7 +409,7 @@ func TestResponsesCompactionTriggerGenerate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoGenerate: %v", err)
 	}
-	assertTerminalCompactionTrigger(t, res.Request.Body, "summarize")
+	assertTerminalCompactionTrigger(t, res.Request.Body)
 }
 
 // TestResponsesCompactionTriggerStream verifies a CompactionTrigger
@@ -424,10 +429,10 @@ func TestResponsesCompactionTriggerStream(t *testing.T) {
 	}
 	for range res.Parts {
 	}
-	assertTerminalCompactionTrigger(t, res.Request.Body, "summarize")
+	assertTerminalCompactionTrigger(t, res.Request.Body)
 }
 
-func assertTerminalCompactionTrigger(t *testing.T, reqBody []byte, instructions string) {
+func assertTerminalCompactionTrigger(t *testing.T, reqBody []byte) {
 	t.Helper()
 	body := decodeRequestBody(t, reqBody)
 	input, ok := body["input"].([]any)
@@ -438,8 +443,9 @@ func assertTerminalCompactionTrigger(t *testing.T, reqBody []byte, instructions 
 	if last["type"] != "compaction_trigger" {
 		t.Fatalf("last input item should be compaction_trigger, got: %v", input[len(input)-1])
 	}
-	if last["instructions"] != instructions {
-		t.Errorf("instructions = %v, want %q", last["instructions"], instructions)
+	// Upstream never sends instructions: the item is always bare.
+	if _, has := last["instructions"]; has {
+		t.Errorf("compaction_trigger must be bare, got: %v", last)
 	}
 }
 
@@ -490,7 +496,8 @@ func TestResponsesParseParallelWrapper(t *testing.T) {
 
 // TestResponsesToolResultBreakpointPassthrough is a table test verifying
 // breakpoint markers on scalar tool results are forwarded to the wire
-// function_call_output item, and never added for content-type results.
+// function_call_output item in input_text array form carrying
+// prompt_cache_breakpoint, and never added for content-type results.
 func TestResponsesToolResultBreakpointPassthrough(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
@@ -498,9 +505,9 @@ func TestResponsesToolResultBreakpointPassthrough(t *testing.T) {
 		breakpoint     any
 		wantBreakpoint bool
 	}{
-		{"text with breakpoint", ToolResultOutput{Type: "text", Value: "ok"}, "bp-1", true},
-		{"json with breakpoint", ToolResultOutput{Type: "json", Value: map[string]any{"a": 1}}, "bp-2", true},
-		{"content skips breakpoint", ToolResultOutput{Type: "content", Value: []any{"x"}}, "bp-3", false},
+		{"text with breakpoint", ToolResultOutput{Type: "text", Value: "ok"}, map[string]any{"mode": "explicit"}, true},
+		{"json with breakpoint", ToolResultOutput{Type: "json", Value: map[string]any{"a": 1}}, map[string]any{"mode": "explicit"}, true},
+		{"content skips breakpoint", ToolResultOutput{Type: "content", Value: []any{"x"}}, map[string]any{"mode": "explicit"}, false},
 		{"scalar without breakpoint", ToolResultOutput{Type: "text", Value: "ok"}, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -532,12 +539,24 @@ func TestResponsesToolResultBreakpointPassthrough(t *testing.T) {
 			if item["type"] != "function_call_output" {
 				t.Fatalf("item type = %v", item["type"])
 			}
-			bp, has := item["breakpoint"]
-			if has != tc.wantBreakpoint {
-				t.Errorf("breakpoint presence = %v, want %v (item: %v)", has, tc.wantBreakpoint, item)
+			if _, has := item["breakpoint"]; has {
+				t.Errorf("top-level breakpoint must not be set (item: %v)", item)
 			}
-			if tc.wantBreakpoint && bp != tc.breakpoint {
-				t.Errorf("breakpoint = %v, want %v", bp, tc.breakpoint)
+			parts, isArray := item["output"].([]any)
+			if tc.wantBreakpoint {
+				if !isArray || len(parts) != 1 {
+					t.Fatalf("output should be a single input_text part, got: %v", item["output"])
+				}
+				part, _ := parts[0].(map[string]any)
+				if part["type"] != "input_text" {
+					t.Errorf("part type = %v, want input_text", part["type"])
+				}
+				bp, _ := part["prompt_cache_breakpoint"].(map[string]any)
+				if bp["mode"] != "explicit" {
+					t.Errorf("prompt_cache_breakpoint = %v, want {mode:explicit}", part["prompt_cache_breakpoint"])
+				}
+			} else if isArray {
+				t.Errorf("output should stay a scalar string, got: %v", item["output"])
 			}
 		})
 	}

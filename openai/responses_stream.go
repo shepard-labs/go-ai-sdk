@@ -371,17 +371,29 @@ func (m *openaiResponsesModel) runResponsesStream(
 }
 
 // isChoicesShapedChunk reports whether a raw SSE payload is a Chat
-// Completions chunk (a top-level "choices" array with no Responses event
-// "type") rather than a Responses event.
+// Completions chunk (a top-level non-empty "choices" array of objects
+// carrying delta/message, with no Responses event "type") rather than a
+// Responses event. Requiring an object element with delta/message avoids
+// flagging null/[]/scalar choices payloads as the wrong surface.
 func isChoicesShapedChunk(raw []byte) bool {
 	var probe struct {
-		Type    string          `json:"type"`
-		Choices json.RawMessage `json:"choices"`
+		Type    string           `json:"type"`
+		Choices []map[string]any `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return false
 	}
-	return probe.Type == "" && len(probe.Choices) > 0
+	if probe.Type != "" || len(probe.Choices) == 0 {
+		return false
+	}
+	first := probe.Choices[0]
+	if _, ok := first["delta"]; ok {
+		return true
+	}
+	if _, ok := first["message"]; ok {
+		return true
+	}
+	return false
 }
 
 // responsesStreamEvent is the union of fields a Responses API event can
