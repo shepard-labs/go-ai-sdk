@@ -406,7 +406,23 @@ func (m *openaiResponsesModel) parseResponsesResponse(body, requestBody []byte) 
 	}
 	outputs, ok := raw["output"].([]any)
 	if !ok || len(outputs) == 0 {
-		return nil, InvalidResponseDataError{Message: "response has no output content"}
+		var detail map[string]any
+		if status, ok := raw["status"].(string); ok && status != "" {
+			detail = map[string]any{"status": status}
+		}
+		if inc, ok := raw["incomplete_details"].(map[string]any); ok && len(inc) > 0 {
+			if detail == nil {
+				detail = map[string]any{}
+			}
+			detail["incomplete_details"] = inc
+		}
+		msg := "response has no output content"
+		if len(detail) > 0 {
+			if b, err := json.Marshal(detail); err == nil {
+				msg += " (" + string(b) + ")"
+			}
+		}
+		return nil, InvalidResponseDataError{Message: msg, Data: detail}
 	}
 	if fr, ok := raw["status"].(string); ok {
 		hasToolCall := false
@@ -1348,8 +1364,11 @@ func buildResponsesProviderTool(t Tool) (map[string]any, []Warning, error) {
 		return map[string]any{"type": "apply_patch"}, nil, nil
 	case "mcp":
 		tool := map[string]any{"type": "mcp", "server_label": args["serverLabel"], "server_url": args["serverUrl"]}
+		var toolWarns []Warning
 		if v, ok := args["allowedTools"]; ok {
-			if normalized := normalizeMCPAllowedTools(v); normalized != nil {
+			normalized, warns := normalizeMCPAllowedTools(v)
+			toolWarns = append(toolWarns, warns...)
+			if normalized != nil {
 				tool["allowed_tools"] = normalized
 			}
 		}
@@ -1358,7 +1377,7 @@ func buildResponsesProviderTool(t Tool) (map[string]any, []Warning, error) {
 				tool[camelToSnake(key)] = v
 			}
 		}
-		return tool, nil, nil
+		return tool, toolWarns, nil
 	case "custom":
 		tool := map[string]any{"type": "custom", "name": args["name"]}
 		if v, ok := args["description"].(string); ok && v != "" {
@@ -1389,13 +1408,15 @@ func buildResponsesProviderTool(t Tool) (map[string]any, []Warning, error) {
 // wire shape: either a plain array of tool names, or
 // {"tool_names": [...]}. It accepts []string / []any slices as well as
 // struct / map forms carrying tool_names (or toolNames). Unrecognized
-// values pass through unchanged.
-func normalizeMCPAllowedTools(v any) any {
+// shapes are omitted with a warning instead of passing through.
+// Returned slices are copies, never aliases of the caller's input.
+func normalizeMCPAllowedTools(v any) (any, []Warning) {
+	unrecognized := []Warning{{Type: "other", Message: "ignoring unsupported allowedTools value; omitting allowed_tools"}}
 	if v == nil {
-		return nil
+		return nil, nil
 	}
 	if names, ok := stringSliceValue(v); ok {
-		return names
+		return append(make([]string, 0, len(names)), names...), nil
 	}
 	var m map[string]any
 	switch t := v.(type) {
@@ -1404,22 +1425,22 @@ func normalizeMCPAllowedTools(v any) any {
 	default:
 		raw, err := json.Marshal(v)
 		if err != nil {
-			return v
+			return nil, unrecognized
 		}
 		var decoded map[string]any
 		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return v
+			return nil, unrecognized
 		}
 		m = decoded
 	}
 	for _, key := range []string{"tool_names", "toolNames"} {
 		if names, ok := m[key]; ok {
 			if list, ok := stringSliceValue(names); ok {
-				return map[string]any{"tool_names": list}
+				return map[string]any{"tool_names": append(make([]string, 0, len(list)), list...)}, nil
 			}
 		}
 	}
-	return v
+	return nil, unrecognized
 }
 
 // stringSliceValue returns v as a []string when v is a slice or array of

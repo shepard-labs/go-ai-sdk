@@ -79,6 +79,11 @@ func (p *openaiProvider) TranscriptionModel(modelID string) TranscriptionModel {
 	return p.Transcription(modelID)
 }
 
+// Translation returns a translation model.
+func (p *openaiProvider) Translation(modelID string) TranslationModel {
+	return newTranslationModel(p, modelID)
+}
+
 // Files returns the Files API surface.
 func (p *openaiProvider) Files() Files { return p.files }
 

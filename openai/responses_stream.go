@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -176,6 +177,15 @@ func toolAccumForDelta(parts chan<- StreamPart, state *responsesStreamState, eve
 		if acc.id == "" && event.ItemID != "" {
 			acc.id = event.ItemID
 		}
+		if event.Name != "" && acc.toolName == "" {
+			acc.toolName = event.Name
+		}
+		// Lazily emit Start once the tool name is known, so deltas that
+		// arrived before output_item.added are still surfaced.
+		if !acc.started && acc.toolName != "" {
+			parts <- StreamToolInputStart{ID: acc.id, ToolName: acc.toolName}
+			acc.started = true
+		}
 		return acc
 	}
 	name := event.Name
@@ -222,9 +232,11 @@ func closeResponsesTextAccum(parts chan<- StreamPart, state *responsesStreamStat
 	parts <- StreamTextEnd{ID: responsesDisplayID(acc.id, "txt-0"), ProviderMetadata: endPM}
 }
 
-// closeResponsesToolAccum finalizes a tool accumulator (input end plus
-// tool call, coercing invalid input to "{}") and removes it. It is a
-// no-op when the key holds nothing.
+// closeResponsesToolAccum finalizes a tool accumulator and removes it. It
+// is a no-op when the key holds nothing. Valid input (or empty input,
+// coerced to "{}") closes with input end plus a tool call; invalid input
+// is never executed as a tool call — it closes with input end plus a
+// StreamError and latches an error finish reason.
 func closeResponsesToolAccum(parts chan<- StreamPart, state *responsesStreamState, key string, extraPM ProviderMetadata) {
 	acc, ok := state.tools[key]
 	if !ok {
@@ -232,10 +244,15 @@ func closeResponsesToolAccum(parts chan<- StreamPart, state *responsesStreamStat
 	}
 	delete(state.tools, key)
 	input := acc.input.String()
-	if !json.Valid([]byte(input)) {
+	parts <- StreamToolInputEnd{ID: acc.id}
+	if input != "" && !json.Valid([]byte(input)) {
+		parts <- StreamError{Err: InvalidResponseDataError{Message: "Invalid tool call arguments JSON.", Data: input}}
+		state.finishReason = errorFinishReason()
+		return
+	}
+	if input == "" {
 		input = "{}"
 	}
-	parts <- StreamToolInputEnd{ID: acc.id}
 	parts <- StreamToolCall{ToolCallContent: ToolCallContent{
 		ToolCallContentEmbed: ToolCallContentEmbed{
 			ToolCallID:       acc.id,
@@ -304,41 +321,32 @@ func (m *openaiResponsesModel) runResponsesStream(
 		m.processResponsesEvent(parts, sresp, state, event)
 		return true
 	})
-	// Close any open accumulators.
-	for _, acc := range state.text {
-		endPM := ProviderMetadata{}
-		if len(acc.annotations) > 0 {
-			endPM["openai"] = map[string]any{"annotations": acc.annotations}
-		}
-		parts <- StreamTextEnd{ID: responsesDisplayID(acc.id, "txt-0"), ProviderMetadata: endPM}
+	// Close any open accumulators in deterministic key order (map
+	// iteration order is random). Invalid tool input is rejected with a
+	// StreamError, never executed as a tool call.
+	textKeys := make([]string, 0, len(state.text))
+	for k := range state.text {
+		textKeys = append(textKeys, k)
 	}
-	for _, acc := range state.tools {
-		input := acc.input.String()
-		if !json.Valid([]byte(input)) {
-			input = "{}"
-		}
-		parts <- StreamToolInputEnd{ID: acc.id}
-		parts <- StreamToolCall{ToolCallContent: ToolCallContent{
-			ToolCallContentEmbed: ToolCallContentEmbed{
-				ToolCallID: acc.id,
-				ToolName:   acc.toolName,
-				Input:      json.RawMessage(input),
-			},
-		}}
+	sort.Strings(textKeys)
+	for _, k := range textKeys {
+		closeResponsesTextAccum(parts, state, k)
 	}
-	for _, acc := range state.reasoning {
-		endPM := ProviderMetadata{}
-		om := map[string]any{}
-		if acc.id != "" {
-			om["itemId"] = acc.id
-		}
-		if acc.encrypted != "" {
-			om["reasoningEncryptedContent"] = acc.encrypted
-		}
-		if len(om) > 0 {
-			endPM["openai"] = om
-		}
-		parts <- StreamReasoningEnd{ID: responsesDisplayID(acc.id, "reasoning-0"), ProviderMetadata: endPM}
+	toolKeys := make([]string, 0, len(state.tools))
+	for k := range state.tools {
+		toolKeys = append(toolKeys, k)
+	}
+	sort.Strings(toolKeys)
+	for _, k := range toolKeys {
+		closeResponsesToolAccum(parts, state, k, nil)
+	}
+	reasoningKeys := make([]string, 0, len(state.reasoning))
+	for k := range state.reasoning {
+		reasoningKeys = append(reasoningKeys, k)
+	}
+	sort.Strings(reasoningKeys)
+	for _, k := range reasoningKeys {
+		closeResponsesReasoningAccum(parts, state, k)
 	}
 	finalUsage := Usage{}
 	if state.usage != nil {
@@ -474,7 +482,16 @@ func (m *openaiResponsesModel) processResponsesEvent(parts chan<- StreamPart, sr
 	case "response.code_interpreter_call_code.delta":
 		acc := toolAccumForDelta(parts, state, event, "code_interpreter")
 		acc.input.WriteString(event.Delta)
-		parts <- StreamToolInputDelta{ID: acc.id, Delta: event.Delta}
+		// Emit Start lazily so that deltas arriving before the
+		// output_item.added are still surfaced with the correct tool
+		// name, and Start always precedes the first Delta.
+		if !acc.started && acc.toolName != "" {
+			parts <- StreamToolInputStart{ID: acc.id, ToolName: acc.toolName}
+			acc.started = true
+		}
+		if acc.started {
+			parts <- StreamToolInputDelta{ID: acc.id, Delta: event.Delta}
+		}
 	case "response.image_generation_call.partial_image":
 		// Per spec: emit a preliminary ToolResultContent-shaped event with
 		// the partial base64 image as Output.Value and preliminary=true in
@@ -502,7 +519,16 @@ func (m *openaiResponsesModel) processResponsesEvent(parts chan<- StreamPart, sr
 		acc := toolAccumForDelta(parts, state, event, "apply_patch")
 		escaped, _ := json.Marshal(event.Delta)
 		_, _ = acc.input.Write([]byte(event.Delta))
-		parts <- StreamToolInputDelta{ID: acc.id, Delta: string(escaped)}
+		// Emit Start lazily so that deltas arriving before the
+		// output_item.added are still surfaced with the correct tool
+		// name, and Start always precedes the first Delta.
+		if !acc.started && acc.toolName != "" {
+			parts <- StreamToolInputStart{ID: acc.id, ToolName: acc.toolName}
+			acc.started = true
+		}
+		if acc.started {
+			parts <- StreamToolInputDelta{ID: acc.id, Delta: string(escaped)}
+		}
 	case "response.apply_patch_call_operation_diff.done":
 		// The spec says apply_patch's output_item.done is what normally
 		// closes the tool input, but the diff.done event also signals
@@ -669,7 +695,7 @@ func handleResponsesItemAdded(parts chan<- StreamPart, state *responsesStreamSta
 			Dynamic:          true,
 		}}
 		parts <- StreamToolApprovalRequest{ApprovalID: id, ToolCallID: toolCallID}
-	case "function_call", "custom_tool_call", "local_shell_call", "shell_call", "apply_patch_call", "tool_search_call", "web_search_call", "file_search_call", "image_generation_call", "code_interpreter_call":
+	case "function_call", "custom_tool_call", "local_shell_call", "shell_call", "apply_patch_call", "mcp_call", "tool_search_call", "web_search_call", "file_search_call", "image_generation_call", "code_interpreter_call":
 		toolName := t
 		if t == "function_call" || t == "custom_tool_call" {
 			if n, ok := event.Item["name"].(string); ok {
@@ -721,7 +747,7 @@ func handleResponsesItemDone(parts chan<- StreamPart, state *responsesStreamStat
 		}
 		parts <- StreamTextEnd{ID: id, ProviderMetadata: endPM}
 		delete(state.text, key)
-	case "function_call", "custom_tool_call", "apply_patch_call", "local_shell_call", "shell_call", "tool_search_call", "web_search_call", "file_search_call", "image_generation_call", "code_interpreter_call":
+	case "function_call", "custom_tool_call":
 		key, acc, ok := lookupResponsesToolAccum(state, event.OutputIndex, id)
 		if !ok {
 			return
@@ -730,6 +756,40 @@ func handleResponsesItemDone(parts chan<- StreamPart, state *responsesStreamStat
 			acc.id = id
 		}
 		input := acc.input.String()
+		if input != "" && !json.Valid([]byte(input)) {
+			// Function-type calls expect JSON arguments: invalid input
+			// must never execute as a tool call. Close the input with
+			// a StreamError and latch an error finish reason.
+			parts <- StreamToolInputEnd{ID: acc.id}
+			parts <- StreamError{Err: InvalidResponseDataError{Message: "Invalid tool call arguments JSON.", Data: input}}
+			state.finishReason = errorFinishReason()
+			delete(state.tools, key)
+			return
+		}
+		if input == "" {
+			input = "{}"
+		}
+		parts <- StreamToolInputEnd{ID: acc.id}
+		parts <- StreamToolCall{ToolCallContent: ToolCallContent{
+			ToolCallContentEmbed: ToolCallContentEmbed{
+				ToolCallID: acc.id,
+				ToolName:   acc.toolName,
+				Input:      json.RawMessage(input),
+			},
+		}}
+		delete(state.tools, key)
+	case "apply_patch_call", "local_shell_call", "shell_call", "code_interpreter_call", "mcp_call", "tool_search_call", "web_search_call", "file_search_call", "image_generation_call":
+		key, acc, ok := lookupResponsesToolAccum(state, event.OutputIndex, id)
+		if !ok {
+			return
+		}
+		if acc.id == "" {
+			acc.id = id
+		}
+		input := acc.input.String()
+		// Hosted/executed tools stream non-JSON payloads (diffs, code,
+		// shell output), so invalid input is coerced to "{}" and still
+		// surfaced as a tool call instead of erroring.
 		if !json.Valid([]byte(input)) {
 			input = "{}"
 		}

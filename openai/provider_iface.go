@@ -31,6 +31,7 @@ type Provider interface {
 	SpeechModel(modelID string) SpeechModel
 	Transcription(modelID string) TranscriptionModel
 	TranscriptionModel(modelID string) TranscriptionModel
+	Translation(modelID string) TranslationModel
 
 	// File & skill upload.
 	Files() Files

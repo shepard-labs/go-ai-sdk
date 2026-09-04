@@ -74,11 +74,12 @@ type openaiProvider struct {
 // CreateOpenAI creates an OpenAI provider.
 func CreateOpenAI(settings ProviderSettings) Provider {
 	rawBaseURL := valueOrEnv(settings.BaseURL, "OPENAI_BASE_URL")
+	trimmedBaseURL := strings.TrimSpace(rawBaseURL)
 	var baseURLErr error
-	if rawBaseURL != "" && strings.TrimSpace(rawBaseURL) == "" {
+	if rawBaseURL != "" && trimmedBaseURL == "" {
 		baseURLErr = fmt.Errorf("openai: baseURL must not be empty or whitespace-only")
 	}
-	baseURL := strings.TrimRight(rawBaseURL, "/")
+	baseURL := strings.TrimRight(trimmedBaseURL, "/")
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}

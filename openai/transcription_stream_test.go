@@ -69,8 +69,9 @@ func TestTranscriptionStreamDeltas(t *testing.T) {
 	}
 }
 
-// TestTranscriptionStreamDoneOnly verifies a stream with no deltas closes
-// with just a finish part (no dangling text end).
+// TestTranscriptionStreamDoneOnly verifies a stream with no deltas still
+// surfaces the done text as a complete start/delta/end sequence followed
+// by finish (done-only text must not be silently dropped).
 func TestTranscriptionStreamDoneOnly(t *testing.T) {
 	stream := "data: {\"type\":\"transcript.text.done\",\"text\":\"hi\"}\n\n" +
 		"data: [DONE]\n\n"
@@ -79,17 +80,28 @@ func TestTranscriptionStreamDoneOnly(t *testing.T) {
 		Audio:     []byte{0x00, 0x01},
 		MediaType: "audio/wav",
 	})
-	var sawTextEnd, sawFinish bool
+	var sawTextStart, sawTextEnd, sawFinish bool
+	var deltas []string
 	for _, part := range parts {
-		switch part.(type) {
+		switch v := part.(type) {
+		case StreamTextStart:
+			sawTextStart = true
+		case StreamTextDelta:
+			deltas = append(deltas, v.Text)
 		case StreamTextEnd:
 			sawTextEnd = true
 		case StreamFinish:
 			sawFinish = true
 		}
 	}
-	if sawTextEnd {
-		t.Error("unexpected StreamTextEnd without deltas")
+	if !sawTextStart {
+		t.Error("no StreamTextStart for done-only text")
+	}
+	if len(deltas) != 1 || deltas[0] != "hi" {
+		t.Errorf("deltas: %q, want [hi]", deltas)
+	}
+	if !sawTextEnd {
+		t.Error("no StreamTextEnd for done-only text")
 	}
 	if !sawFinish {
 		t.Error("no StreamFinish")

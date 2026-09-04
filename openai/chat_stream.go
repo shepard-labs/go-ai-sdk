@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // runChatStream drives an OpenAI chat-completion SSE stream, translating
@@ -31,6 +32,7 @@ func (m *openaiChatLanguageModel) runChatStream(
 	state := newChatStreamState()
 	state.providerOptions = cloneProviderOptions(opts.ProviderOptions)
 	metadataKey := providerMetadataKey("openai.chat", state.providerOptions)
+	state.metadataKey = metadataKey
 	var latestRawUsage json.RawMessage
 	var usageShape chatUsageShape
 	metadataSent := false
@@ -165,6 +167,11 @@ type chatStreamToolState struct {
 	Args       strings.Builder
 	Started    bool
 	ThoughtSig *string
+	// Index is the wire tool-call index this slot belongs to; split
+	// slots (index reused for a new id) share their parent's Index.
+	Index int
+	// Seq is the creation sequence, tie-breaking slots that share Index.
+	Seq int
 }
 
 type chatStreamState struct {
@@ -174,7 +181,9 @@ type chatStreamState struct {
 	toolCalls       map[int]*chatStreamToolState
 	pendingArgs     map[int]string
 	toolCallCount   int
+	toolSeqNext     int
 	providerOptions ProviderOptions
+	metadataKey     string
 	fatal           bool
 }
 
@@ -261,7 +270,53 @@ func (m *openaiChatLanguageModel) processChatStreamDelta(parts chan<- StreamPart
 	}
 	for _, tc := range delta.ToolCalls {
 		index := resolveToolCallIndex(state, tc.Index)
+		wireIndex := index
+		if tc.Index != nil {
+			wireIndex = *tc.Index
+		}
+		if tc.ID != nil && *tc.ID != "" {
+			// A reused wire index spawns split slots sharing one
+			// Index: route by tool id first so follow-up deltas for
+			// the new id reach the split slot instead of reopening
+			// the old one.
+			if slot, ok := chatStreamToolSlotByID(state, *tc.ID); ok {
+				index = slot
+			}
+		} else if slot, ok := latestChatStreamToolSlot(state, wireIndex); ok {
+			// Arguments-only continuation chunks carry no id: route
+			// to the latest slot on this wire index (the split, when
+			// the index was reused) instead of merging into the old
+			// call.
+			index = slot
+		}
 		tool, exists := state.toolCalls[index]
+		if exists && tc.ID != nil && *tc.ID != "" && tool.ID != "" && tool.ID != *tc.ID {
+			// The wire index was reused for a different tool call id:
+			// split into a fresh slot instead of merging Args buffers
+			// across distinct ids.
+			slot := state.toolCallCount
+			for {
+				if _, taken := state.toolCalls[slot]; !taken {
+					break
+				}
+				slot++
+			}
+			state.toolCallCount = slot + 1
+			split := &chatStreamToolState{ID: *tc.ID, Index: wireIndex, Seq: state.toolSeqNext}
+			state.toolSeqNext++
+			if tc.Function.Name != nil {
+				split.Name = *tc.Function.Name
+			}
+			if tc.ExtraContent.Google.ThoughtSignature != nil {
+				sig := *tc.ExtraContent.Google.ThoughtSignature
+				split.ThoughtSig = &sig
+			}
+			if tc.Function.Arguments != nil {
+				split.Args.WriteString(*tc.Function.Arguments)
+			}
+			state.toolCalls[slot] = split
+			continue
+		}
 		if !exists {
 			if tc.ID == nil || *tc.ID == "" {
 				// If arguments arrive before the tool id, buffer them
@@ -281,12 +336,14 @@ func (m *openaiChatLanguageModel) processChatStreamDelta(parts chan<- StreamPart
 					pending += *tc.Function.Arguments
 				}
 				state.pendingArgs[index] = pending
-				state.toolCalls[index] = &chatStreamToolState{ID: toolID}
+				state.toolCalls[index] = &chatStreamToolState{ID: toolID, Index: wireIndex, Seq: state.toolSeqNext}
+				state.toolSeqNext++
 				continue
 			}
 			toolID := *tc.ID
 			toolName := *tc.Function.Name
-			tool = &chatStreamToolState{ID: toolID, Name: toolName}
+			tool = &chatStreamToolState{ID: toolID, Name: toolName, Index: wireIndex, Seq: state.toolSeqNext}
+			state.toolSeqNext++
 			state.toolCalls[index] = tool
 			if tc.ExtraContent.Google.ThoughtSignature != nil {
 				sig := *tc.ExtraContent.Google.ThoughtSignature
@@ -329,6 +386,34 @@ func resolveToolCallIndex(state *chatStreamState, index *int) int {
 	return current
 }
 
+// chatStreamToolSlotByID returns the slot holding the tool call with the
+// given id, if any.
+func chatStreamToolSlotByID(state *chatStreamState, id string) (int, bool) {
+	for slot, tool := range state.toolCalls {
+		if tool.ID == id {
+			return slot, true
+		}
+	}
+	return 0, false
+}
+
+// latestChatStreamToolSlot returns the most recently created slot sharing
+// the given wire index, if any. After an index-reuse split this is the
+// split slot, which owns subsequent arguments-only continuations.
+func latestChatStreamToolSlot(state *chatStreamState, wireIndex int) (int, bool) {
+	best := 0
+	found := false
+	for slot, tool := range state.toolCalls {
+		if tool.Index != wireIndex {
+			continue
+		}
+		if !found || tool.Seq > state.toolCalls[best].Seq {
+			best, found = slot, true
+		}
+	}
+	return best, found
+}
+
 // finalizeChatStreamTool is the single finalization point for streamed
 // tool calls. The buffered arguments are emitted as one input sequence
 // (Start, Delta, End) followed by either the ToolCall, when the
@@ -341,6 +426,18 @@ func finalizeChatStreamTool(parts chan<- StreamPart, s *chatStreamState, tool *c
 		parts <- StreamToolInputStart{ID: tool.ID, ToolName: tool.Name}
 		tool.Started = true
 	}
+	// A tool without an id or a name can never execute: surface an error
+	// instead of a ToolCall.
+	if tool.ID == "" || tool.Name == "" {
+		msg := "Expected 'function.name' to be a string."
+		if tool.ID == "" {
+			msg = "Expected 'id' to be a string."
+		}
+		parts <- StreamToolInputEnd{ID: tool.ID}
+		parts <- StreamError{Err: InvalidResponseDataError{Message: msg}}
+		s.finishReason = errorFinishReason()
+		return
+	}
 	input := tool.Args.String()
 	if input == "" || json.Valid([]byte(input)) {
 		if input == "" {
@@ -350,12 +447,17 @@ func finalizeChatStreamTool(parts chan<- StreamPart, s *chatStreamState, tool *c
 			parts <- StreamToolInputDelta{ID: tool.ID, Delta: tool.Args.String()}
 		}
 		parts <- StreamToolInputEnd{ID: tool.ID}
+		var toolMetadata ProviderMetadata
+		if tool.ThoughtSig != nil {
+			toolMetadata = ProviderMetadata{s.metadataKey: map[string]any{"thoughtSignature": *tool.ThoughtSig}}
+		}
 		parts <- StreamToolCall{
 			ToolCallContent: ToolCallContent{
 				ToolCallContentEmbed: ToolCallContentEmbed{
-					ToolCallID: tool.ID,
-					ToolName:   tool.Name,
-					Input:      json.RawMessage(input),
+					ToolCallID:       tool.ID,
+					ToolName:         tool.Name,
+					Input:            json.RawMessage(input),
+					ProviderMetadata: toolMetadata,
 				},
 			},
 		}
@@ -375,11 +477,32 @@ func (s *chatStreamState) flushChatStreamState(parts chan<- StreamPart) {
 		parts <- StreamTextEnd{ID: "txt-0"}
 		s.textStarted = false
 	}
+	// Buffered arguments whose tool id never arrived are orphaned tool
+	// calls: surface them as errors instead of silently dropping them.
+	// Pending arguments for a known slot are folded into that tool first
+	// (finalization then decides between a ToolCall and an error).
+	for k, pending := range s.pendingArgs {
+		if tool, ok := s.toolCalls[k]; ok {
+			tool.Args.WriteString(pending)
+		} else if pending != "" {
+			parts <- StreamError{Err: InvalidResponseDataError{Message: "Orphaned tool call arguments without tool id.", Data: pending}}
+			s.finishReason = errorFinishReason()
+		}
+		delete(s.pendingArgs, k)
+	}
+	// Deterministic emission order: numeric wire index first, creation
+	// sequence breaking ties between a slot and its index-reuse splits.
 	keys := make([]int, 0, len(s.toolCalls))
 	for k := range s.toolCalls {
 		keys = append(keys, k)
 	}
-	sort.Ints(keys)
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := s.toolCalls[keys[i]], s.toolCalls[keys[j]]
+		if a.Index != b.Index {
+			return a.Index < b.Index
+		}
+		return a.Seq < b.Seq
+	})
 	for _, k := range keys {
 		finalizeChatStreamTool(parts, s, s.toolCalls[k])
 	}
@@ -475,8 +598,44 @@ func cloneRawMessage(raw json.RawMessage) json.RawMessage {
 }
 
 func providerMetadataKey(name string, opts ProviderOptions) string {
-	_ = opts
+	// Mirror openaicompatible's metadataKeyForProviderOptions: when the
+	// caller's ProviderOptions carry the camelCase variant of the name,
+	// that variant is the metadata key.
+	camel := toCamelCase(name)
+	if camel != name {
+		if _, ok := opts[camel]; ok {
+			return camel
+		}
+	}
 	return name
+}
+
+// toCamelCase converts snake_case and kebab-case names to camelCase,
+// mirroring openaicompatible's helper.
+func toCamelCase(str string) string {
+	var b strings.Builder
+	b.Grow(len(str))
+	var separator rune
+	for _, r := range str {
+		if separator != 0 {
+			if r >= 'a' && r <= 'z' {
+				b.WriteRune(unicode.ToUpper(r))
+				separator = 0
+				continue
+			}
+			b.WriteRune(separator)
+			separator = 0
+		}
+		if r == '_' || r == '-' {
+			separator = r
+			continue
+		}
+		b.WriteRune(r)
+	}
+	if separator != 0 {
+		b.WriteRune(separator)
+	}
+	return b.String()
 }
 
 func processSSEStream(body io.Reader, onChunk func([]byte) bool) {

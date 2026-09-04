@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -122,9 +123,28 @@ func (m *openaiTranscriptionModel) runTranscriptionStream(ctx context.Context, r
 			parts <- StreamTextDelta{ID: partID, Text: evt.Delta}
 			text.WriteString(evt.Delta)
 		case "transcript.text.done":
-			if evt.Text != "" && text.Len() == 0 {
-				text.WriteString(evt.Text)
+			// A done-only stream (no prior deltas) still surfaces its
+			// text as a complete start/delta sequence. When deltas were
+			// seen, only the unseen suffix of done.Text is emitted so the
+			// accumulator stays reconciled with the parts.
+			if done := evt.Text; done != "" && text.String() != done {
+				if !started {
+					parts <- StreamTextStart{ID: partID}
+					started = true
+				}
+				rest := done
+				if current := text.String(); strings.HasPrefix(done, current) {
+					rest = done[len(current):]
+				}
+				if rest != "" {
+					parts <- StreamTextDelta{ID: partID, Text: rest}
+					text.WriteString(rest)
+				}
 			}
+		default:
+			parts <- StreamError{Err: InvalidResponseDataError{Message: "Unknown event type " + strconv.Quote(evt.Type), Data: string(raw)}}
+			failed = true
+			return false
 		}
 		return true
 	})

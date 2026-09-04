@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -142,9 +143,14 @@ func convertChatToolCallFromResponse(tc map[string]any) (ToolCallContent, error)
 	fn, _ := tc["function"].(map[string]any)
 	name, _ := fn["name"].(string)
 	args, _ := fn["arguments"].(string)
-	raw := json.RawMessage(args)
-	if len(raw) == 0 {
+	var raw json.RawMessage
+	switch trimmed := strings.TrimSpace(args); {
+	case trimmed == "" || trimmed == "null":
 		raw = json.RawMessage("{}")
+	case !json.Valid([]byte(args)):
+		return ToolCallContent{}, InvalidResponseDataError{Message: "tool_call has invalid arguments JSON", Data: args}
+	default:
+		raw = json.RawMessage(args)
 	}
 	provExec := false
 	if v, ok := tc["provider_executed"].(bool); ok {

@@ -272,7 +272,8 @@ func (m *openaiChatLanguageModel) convertAssistantMessage(msg AssistantMessage) 
 // string. Empty input becomes "{}" so strict-mode requests never send a
 // null or empty arguments payload.
 func chatToolCallArguments(input json.RawMessage) string {
-	if strings.TrimSpace(string(input)) == "" {
+	trimmed := strings.TrimSpace(string(input))
+	if trimmed == "" || trimmed == "null" {
 		return "{}"
 	}
 	return string(input)

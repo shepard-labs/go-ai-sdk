@@ -290,6 +290,70 @@ func TestProcessChatStreamDeltaToolCallComplete(t *testing.T) {
 	}
 }
 
+// TestProcessChatStreamDeltaIndexReuseRoutesContinuationToSplitSlot
+// verifies split-slot routing: when the wire index is reused for a new
+// tool id, arguments-only continuation chunks (no id) must route to the
+// split slot, yielding two coherent calls with no fragmentation and no
+// cross-merge of argument buffers.
+func TestProcessChatStreamDeltaIndexReuseRoutesContinuationToSplitSlot(t *testing.T) {
+	ch, m := newTestStreamParts()
+	state := newChatStreamState()
+	idx := 0
+	id1, id2 := "call-1", "call-2"
+	name := "weather"
+	args1 := `{"city":"SF"}`
+	args2frag := `{"city":"`
+	cont := `LA"}`
+	m.processChatStreamDelta(ch, state, chatStreamDelta{
+		ToolCalls: []chatStreamToolCall{{
+			ID:    &id1,
+			Index: &idx,
+			Function: chatStreamFunction{
+				Name:      &name,
+				Arguments: &args1,
+			},
+		}},
+	})
+	m.processChatStreamDelta(ch, state, chatStreamDelta{
+		ToolCalls: []chatStreamToolCall{{
+			ID:    &id2,
+			Index: &idx,
+			Function: chatStreamFunction{
+				Name:      &name,
+				Arguments: &args2frag,
+			},
+		}},
+	})
+	// Arguments-only continuation for call-2: no id, same wire index.
+	m.processChatStreamDelta(ch, state, chatStreamDelta{
+		ToolCalls: []chatStreamToolCall{{
+			Index: &idx,
+			Function: chatStreamFunction{
+				Arguments: &cont,
+			},
+		}},
+	})
+	state.flushChatStreamState(ch)
+	close(ch)
+	parts := drainParts(ch)
+
+	inputs := map[string]string{}
+	for _, p := range parts {
+		if call, ok := p.(StreamToolCall); ok {
+			inputs[call.ToolCallID] = string(call.Input)
+		}
+	}
+	if len(inputs) != 2 {
+		t.Fatalf("expected 2 coherent ToolCalls, got %d (%v)", len(inputs), inputs)
+	}
+	if inputs["call-1"] != `{"city":"SF"}` {
+		t.Errorf("call-1 input = %q, want %q (cross-merged?)", inputs["call-1"], `{"city":"SF"}`)
+	}
+	if inputs["call-2"] != `{"city":"LA"}` {
+		t.Errorf("call-2 input = %q, want %q (fragmented?)", inputs["call-2"], `{"city":"LA"}`)
+	}
+}
+
 // TestProcessChatStreamDeltaAnnotation verifies url_citation annotations
 // produce a SourceContent part.
 func TestProcessChatStreamDeltaAnnotation(t *testing.T) {

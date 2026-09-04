@@ -48,6 +48,15 @@ func (m *openaiTranslationModel) DoTranslate(ctx context.Context, opts Translati
 	if m.provider.err != nil {
 		return nil, m.provider.err
 	}
+	// Language and ChunkingStrategy are transcription-only parameters with
+	// no translations-endpoint equivalent; error instead of silently
+	// dropping them. TargetLanguage stays a warning (output is English).
+	if opts.Language != nil {
+		return nil, InvalidPromptError{Message: "language is not supported for translation; the translations API always outputs English"}
+	}
+	if opts.ChunkingStrategy != nil {
+		return nil, InvalidPromptError{Message: "chunking_strategy is not supported for translation"}
+	}
 	warnings := []Warning{}
 	if opts.TargetLanguage != nil {
 		warnings = append(warnings, Warning{Type: "unsupported", Feature: "targetLanguage", Message: "target_language is not supported by the OpenAI translations API; output is English"})

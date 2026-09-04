@@ -202,17 +202,23 @@ func TestResponsesStreamCompletedSendsFinishReason(t *testing.T) {
 }
 
 // TestResponsesStreamCodeInterpreterDelta verifies the code_interpreter
-// delta event emits a tool input delta tagged with code_interpreter.
+// delta event emits a tool input start (lazy, tagged code_interpreter)
+// followed by the tool input delta.
 func TestResponsesStreamCodeInterpreterDelta(t *testing.T) {
 	m := &openaiResponsesModel{modelID: "gpt-4o"}
 	parts := driveResponsesEvents(t, m, []string{
 		`{"type":"response.code_interpreter_call_code.delta","item_id":"ci-1","delta":"print(1)"}`,
 	})
-	if len(parts) != 1 {
+	if len(parts) != 2 {
 		t.Fatalf("parts: %d", len(parts))
 	}
-	if _, ok := parts[0].(StreamToolInputDelta); !ok {
-		t.Fatalf("type: %T", parts[0])
+	if start, ok := parts[0].(StreamToolInputStart); !ok {
+		t.Fatalf("first part: %T, want StreamToolInputStart", parts[0])
+	} else if start.ToolName != "code_interpreter" {
+		t.Errorf("start ToolName: %q", start.ToolName)
+	}
+	if _, ok := parts[1].(StreamToolInputDelta); !ok {
+		t.Fatalf("second part: %T, want StreamToolInputDelta", parts[1])
 	}
 }
 
@@ -277,6 +283,99 @@ func TestResponsesStreamCustomToolCallDelta(t *testing.T) {
 	}
 	if _, ok := parts[1].(StreamToolInputDelta); !ok {
 		t.Fatalf("second part: %T", parts[1])
+	}
+}
+
+// TestResponsesStreamFunctionCallGarbageAtDoneEmitsError verifies the
+// output_item.done hardening: a function_call whose accumulated arguments
+// are invalid JSON emits StreamToolInputEnd plus a StreamError carrying
+// an InvalidResponseDataError (never a live ToolCall) and latches an
+// error finish reason that a later completed event cannot overwrite.
+func TestResponsesStreamFunctionCallGarbageAtDoneEmitsError(t *testing.T) {
+	m := &openaiResponsesModel{modelID: "gpt-4o"}
+	parts := make(chan StreamPart, 64)
+	sresp := &StreamResponse{}
+	state := newResponsesStreamState()
+	events := []string{
+		`{"type":"response.output_item.added","item":{"type":"function_call","id":"fc-err","name":"get_data"}}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc-err","delta":"not-json{{{ "}`,
+		`{"type":"response.output_item.done","item":{"type":"function_call","id":"fc-err"}}`,
+	}
+	for _, raw := range events {
+		var ev responsesStreamEvent
+		if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+			t.Fatalf("unmarshal %q: %v", raw, err)
+		}
+		m.processResponsesEvent(parts, sresp, state, ev)
+	}
+	m.processResponsesEvent(parts, sresp, state, responsesStreamEvent{
+		Type:     "response.completed",
+		Response: &responsesStreamResp{Status: "completed"},
+	})
+	close(parts)
+
+	var sawEnd, sawErr bool
+	for p := range parts {
+		switch e := p.(type) {
+		case StreamToolCall:
+			t.Fatalf("invalid function input must not produce StreamToolCall, got input %q", string(e.Input))
+		case StreamToolInputEnd:
+			if e.ID == "fc-err" {
+				sawEnd = true
+			}
+		case StreamError:
+			if _, ok := e.Err.(InvalidResponseDataError); !ok {
+				t.Fatalf("expected InvalidResponseDataError, got %T", e.Err)
+			}
+			sawErr = true
+		}
+	}
+	if !sawEnd {
+		t.Errorf("expected StreamToolInputEnd for fc-err")
+	}
+	if !sawErr {
+		t.Errorf("expected StreamError for invalid function input")
+	}
+	if state.finishReason != errorFinishReason() {
+		t.Errorf("finish reason = %+v, want latched error", state.finishReason)
+	}
+}
+
+// TestResponsesStreamCodeInterpreterDeltaBeforeAddedStartsFirst verifies
+// lazy Start: a code delta arriving before output_item.added emits
+// StreamToolInputStart before the first StreamToolInputDelta (no
+// Start-after-Delta), and the added event does not emit a duplicate Start.
+func TestResponsesStreamCodeInterpreterDeltaBeforeAddedStartsFirst(t *testing.T) {
+	m := &openaiResponsesModel{modelID: "gpt-4o"}
+	parts := driveResponsesEvents(t, m, []string{
+		`{"type":"response.code_interpreter_call_code.delta","item_id":"ci-9","delta":"print(1)"}`,
+		`{"type":"response.output_item.added","item":{"type":"code_interpreter_call","id":"ci-9"}}`,
+		`{"type":"response.output_item.done","item":{"type":"code_interpreter_call","id":"ci-9"}}`,
+	})
+	startIdx, deltaIdx, starts := -1, -1, 0
+	for i, p := range parts {
+		switch v := p.(type) {
+		case StreamToolInputStart:
+			if v.ID == "ci-9" {
+				starts++
+				if startIdx < 0 {
+					startIdx = i
+				}
+			}
+		case StreamToolInputDelta:
+			if v.ID == "ci-9" && deltaIdx < 0 {
+				deltaIdx = i
+			}
+		}
+	}
+	if starts != 1 {
+		t.Errorf("expected exactly 1 StreamToolInputStart for ci-9, got %d", starts)
+	}
+	if startIdx < 0 || deltaIdx < 0 {
+		t.Fatalf("missing Start (%d) or Delta (%d) for ci-9", startIdx, deltaIdx)
+	}
+	if startIdx > deltaIdx {
+		t.Errorf("Start index %d follows Delta index %d, want Start first", startIdx, deltaIdx)
 	}
 }
 
