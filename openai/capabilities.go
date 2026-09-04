@@ -45,18 +45,20 @@ func ModelCapabilitiesForID(modelID string) Capabilities {
 	}
 
 	// Flex processing.
-	if family == "o3" || family == "o4-mini" || (family == "gpt-5" && !isChatLatestVariant(lower)) {
+	if family == "o3" || family == "o4-mini" || (family == "gpt-5" && !isChatLatestVariant(lower)) ||
+		(family == "gpt-5.6" && !isChatLatestVariant(lower)) {
 		caps.SupportsFlexProcessing = true
 	}
 
 	// Priority processing.
 	if family == "gpt-4" || family == "o3" || family == "o4-mini" ||
-		(family == "gpt-5" && !isChatLatestVariant(lower) && !isGpt5NanoFamily(lower) && !isGpt54NanoFamily(lower)) {
+		(family == "gpt-5" && !isChatLatestVariant(lower) && !isGpt5NanoFamily(lower) && !isGpt54NanoFamily(lower)) ||
+		(family == "gpt-5.6" && !isChatLatestVariant(lower)) {
 		caps.SupportsPriorityProcessing = true
 	}
 
 	// Non-reasoning parameters when reasoning effort is "none".
-	if family == "gpt-5.1" || family == "gpt-5.2" || family == "gpt-5.3" || family == "gpt-5.4" || family == "gpt-5.5" {
+	if family == "gpt-5.1" || family == "gpt-5.2" || family == "gpt-5.3" || family == "gpt-5.4" || family == "gpt-5.5" || family == "gpt-5.6" {
 		caps.SupportsNonReasoningParameters = true
 	}
 
@@ -97,7 +99,8 @@ func MaxCompletionTokensForModel(modelID string) int {
 		"gpt-5-nano", "gpt-5-nano-2025-08-07", "gpt-5-chat-latest",
 		"gpt-5.1", "gpt-5.1-2025-11-13", "gpt-5.1-chat-latest",
 		"gpt-5.2", "gpt-5.2-2025-12-11", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11",
-		"gpt-5.3-chat-latest", "gpt-5.4", "gpt-5.5":
+		"gpt-5.3-chat-latest", "gpt-5.4", "gpt-5.5",
+		"gpt-5.6", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra":
 		return 128000
 	}
 	return 0
@@ -112,7 +115,7 @@ func familyPrefix(lowerModelID string) string {
 	// the multi-segment prefixes first (gpt-5.4, gpt-4o-audio-preview, etc.)
 	// before falling back to the basic families.
 	candidates := []string{
-		"gpt-5.5", "gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5",
+		"gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5",
 		"gpt-4.1", "gpt-4o-mini-search-preview", "gpt-4o-search-preview",
 		"gpt-4o-audio-preview", "gpt-4o-mini-audio-preview", "gpt-4o", "gpt-4",
 		"gpt-3.5", "o4-mini", "o3-mini", "o3", "o1",
@@ -127,7 +130,7 @@ func familyPrefix(lowerModelID string) string {
 
 func isReasoningFamilyPrefix(family string) bool {
 	switch family {
-	case "o1", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.3", "gpt-5.4", "gpt-5.5":
+	case "o1", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.3", "gpt-5.4", "gpt-5.5", "gpt-5.6":
 		return true
 	}
 	return false

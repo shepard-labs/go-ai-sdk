@@ -53,3 +53,13 @@ func MCP(args MCPArgs) Tool { return Tool{Type: "provider", ID: "openai.mcp", Ar
 func ToolSearch(args ToolSearchArgs) Tool {
 	return Tool{Type: "provider", ID: "openai.tool_search", Args: args}
 }
+
+// Computer returns the computer provider tool.
+func Computer(args ComputerArgs) Tool {
+	return Tool{Type: "provider", ID: "openai.computer", Args: args}
+}
+
+// ProgrammaticToolCalling returns the programmatic_tool_calling provider tool.
+func ProgrammaticToolCalling(args ProgrammaticToolCallingArgs) Tool {
+	return Tool{Type: "provider", ID: "openai.programmatic_tool_calling", Args: args}
+}

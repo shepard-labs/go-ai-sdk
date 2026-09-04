@@ -180,7 +180,7 @@ func (m *openaiChatLanguageModel) buildChatRequest(opts GenerateOptions) (chatRe
 		if tier != "" {
 			if tier == "flex" && !caps.SupportsFlexProcessing {
 				warnings = append(warnings, Warning{Type: "other", Message: "service_tier \"flex\" is not supported on this model"})
-			} else if tier == "priority" && !caps.SupportsPriorityProcessing {
+			} else if (tier == "priority" || tier == "fast") && !caps.SupportsPriorityProcessing {
 				warnings = append(warnings, Warning{Type: "other", Message: "service_tier \"priority\" is not supported on this model"})
 			} else {
 				body["service_tier"] = tier
@@ -189,6 +189,9 @@ func (m *openaiChatLanguageModel) buildChatRequest(opts GenerateOptions) (chatRe
 	}
 	if v, ok := chatOptions["promptCacheKey"]; ok {
 		body["prompt_cache_key"] = v
+	}
+	if v, ok := chatOptions["promptCacheOptions"]; ok {
+		body["prompt_cache_options"] = v
 	}
 	if v, ok := chatOptions["promptCacheRetention"]; ok {
 		retention, _ := v.(string)

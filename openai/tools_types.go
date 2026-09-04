@@ -112,9 +112,11 @@ type WebSearchArgs struct {
 	UserLocation      *WebSearchUserLocation `json:"userLocation,omitempty"`
 }
 
-// WebSearchFilters restricts web_search to specific allowed domains.
+// WebSearchFilters restricts web_search to specific allowed domains,
+// excluding any blocked domains.
 type WebSearchFilters struct {
 	AllowedDomains []string `json:"allowedDomains,omitempty"`
+	BlockedDomains []string `json:"blockedDomains,omitempty"`
 }
 
 // WebSearchUserLocation hints at the user's location for web_search.
@@ -156,4 +158,20 @@ type ToolSearchArgs struct {
 	Execution   *string `json:"execution,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Parameters  any     `json:"parameters,omitempty"`
+}
+
+// ComputerArgs is the configuration for the computer provider tool.
+type ComputerArgs struct {
+	DisplayWidth  int     `json:"displayWidth,omitempty"`
+	DisplayHeight int     `json:"displayHeight,omitempty"`
+	Environment   *string `json:"environment,omitempty"`
+}
+
+// ProgrammaticToolCallingArgs is the configuration for the
+// programmatic_tool_calling provider tool. AllowedCallers declares which
+// callers may invoke the function tools in the request; OutputSchema
+// describes the program result shape.
+type ProgrammaticToolCallingArgs struct {
+	AllowedCallers []string `json:"allowedCallers,omitempty"`
+	OutputSchema   any      `json:"outputSchema,omitempty"`
 }

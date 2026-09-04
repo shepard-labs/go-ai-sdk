@@ -198,6 +198,12 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 	if v, ok := chatOptions["reasoningEffort"].(string); ok && v != "" {
 		reasoning["effort"] = v
 	}
+	if v, ok := chatOptions["reasoningMode"].(string); ok && v != "" {
+		reasoning["mode"] = v
+	}
+	if v, ok := chatOptions["reasoningContext"].(string); ok && v != "" {
+		reasoning["context"] = v
+	}
 	if v, ok := chatOptions["reasoningSummary"].(string); ok && v != "" {
 		reasoning["summary"] = v
 	}
@@ -228,7 +234,7 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 	if v, ok := chatOptions["serviceTier"].(string); ok && v != "" {
 		if v == "flex" && !caps.SupportsFlexProcessing {
 			warnings = append(warnings, Warning{Type: "other", Message: "service_tier \"flex\" is not supported on this model"})
-		} else if v == "priority" && !caps.SupportsPriorityProcessing {
+		} else if (v == "priority" || v == "fast") && !caps.SupportsPriorityProcessing {
 			warnings = append(warnings, Warning{Type: "other", Message: "service_tier \"priority\" is not supported on this model"})
 		} else {
 			body["service_tier"] = v
@@ -242,6 +248,9 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 	}
 	if v, ok := chatOptions["promptCacheKey"].(string); ok && v != "" {
 		body["prompt_cache_key"] = v
+	}
+	if v, ok := chatOptions["promptCacheOptions"]; ok {
+		body["prompt_cache_options"] = v
 	}
 	if v, ok := chatOptions["promptCacheRetention"].(string); ok && v != "" {
 		body["prompt_cache_retention"] = v
@@ -411,6 +420,10 @@ func (m *openaiResponsesModel) convertResponsesToolChoice(choice ToolChoice, too
 						return "local_shell", nil
 					case "applyPatch":
 						return "apply_patch", nil
+					case "computer":
+						return "computer", nil
+					case "programmatic_tool_calling":
+						return "programmatic_tool_calling", nil
 					case "toolSearch":
 						return "tool_search", nil
 					case "custom":
@@ -535,6 +548,10 @@ func parseResponsesUsage(usage map[string]any) Usage {
 			t := int(v)
 			u.InputTokens.CacheRead = &t
 		}
+		if v, ok := details["cache_write_tokens"].(float64); ok {
+			t := int(v)
+			u.InputTokens.CacheWrite = &t
+		}
 	}
 	return u
 }
@@ -559,6 +576,154 @@ func mapResponsesFinishReason(reason string, hasToolCall bool) FinishReason {
 		return FinishReason{Unified: "tool-calls", Raw: reason}
 	}
 	return FinishReason{Unified: "other", Raw: reason}
+}
+
+// mapResponseToolCaller converts a wire `caller` value
+// ({type:"direct"} or {type:"program",caller_id}) into SDK shape
+// ({type:"direct"} or {type:"program",callerId}). It returns nil when
+// the value carries no recognized caller.
+func mapResponseToolCaller(v any) map[string]any {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	t, _ := m["type"].(string)
+	switch t {
+	case "direct":
+		return map[string]any{"type": "direct"}
+	case "program":
+		id, _ := m["caller_id"].(string)
+		if id == "" {
+			id, _ = m["callerId"].(string)
+		}
+		if id == "" {
+			return nil
+		}
+		return map[string]any{"type": "program", "callerId": id}
+	}
+	return nil
+}
+
+// wireResponseToolCaller converts an SDK-shape caller value back to its
+// wire form ({type:"program",caller_id}).
+func wireResponseToolCaller(v any) map[string]any {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	t, _ := m["type"].(string)
+	switch t {
+	case "direct":
+		return map[string]any{"type": "direct"}
+	case "program":
+		id, _ := m["callerId"].(string)
+		if id == "" {
+			id, _ = m["caller_id"].(string)
+		}
+		if id == "" {
+			return nil
+		}
+		return map[string]any{"type": "program", "caller_id": id}
+	}
+	return nil
+}
+
+// responseToolCaller extracts the SDK-shape caller from a tool call or
+// result part, checking ProviderOptions["openai"]["caller"] first and
+// then ProviderMetadata["openai"]["caller"].
+func responseToolCaller(provOpts, provMeta ProviderMetadata) map[string]any {
+	if openaiOpts, ok := provOpts["openai"].(map[string]any); ok {
+		if caller := wireResponseToolCaller(openaiOpts["caller"]); caller != nil {
+			return caller
+		}
+	}
+	if openaiMeta, ok := provMeta["openai"].(map[string]any); ok {
+		if caller := wireResponseToolCaller(openaiMeta["caller"]); caller != nil {
+			return caller
+		}
+	}
+	return nil
+}
+
+// mapComputerCallInput converts a wire computer_call item into the SDK
+// input shape ({actions, pendingSafetyChecks, status}).
+func mapComputerCallInput(item map[string]any) map[string]any {
+	var actions []any
+	if list, ok := item["actions"].([]any); ok {
+		for _, a := range list {
+			if am, ok := a.(map[string]any); ok {
+				actions = append(actions, mapComputerAction(am))
+			}
+		}
+	} else if single, ok := item["action"].(map[string]any); ok {
+		actions = []any{mapComputerAction(single)}
+	}
+	if actions == nil {
+		actions = []any{}
+	}
+	var checks []any
+	if list, ok := item["pending_safety_checks"].([]any); ok {
+		for _, c := range list {
+			if cm, ok := c.(map[string]any); ok {
+				check := map[string]any{}
+				if id, ok := cm["id"].(string); ok {
+					check["id"] = id
+				}
+				if code, ok := cm["code"].(string); ok && code != "" {
+					check["code"] = code
+				}
+				if msg, ok := cm["message"].(string); ok && msg != "" {
+					check["message"] = msg
+				}
+				checks = append(checks, check)
+			}
+		}
+	}
+	if checks == nil {
+		checks = []any{}
+	}
+	status, _ := item["status"].(string)
+	return map[string]any{"actions": actions, "pendingSafetyChecks": checks, "status": status}
+}
+
+// mapComputerAction converts a single wire computer action into SDK
+// shape (scroll_x/scroll_y become scrollX/scrollY).
+func mapComputerAction(a map[string]any) map[string]any {
+	out := make(map[string]any, len(a))
+	for k, v := range a {
+		out[k] = v
+	}
+	if out["type"] == "scroll" {
+		if v, ok := out["scroll_x"]; ok {
+			out["scrollX"] = v
+			delete(out, "scroll_x")
+		}
+		if v, ok := out["scroll_y"]; ok {
+			out["scrollY"] = v
+			delete(out, "scroll_y")
+		}
+	}
+	return out
+}
+
+// wireComputerAction converts an SDK-shape computer action back to its
+// wire form (scrollX/scrollY become scroll_x/scroll_y).
+func wireComputerAction(a map[string]any) map[string]any {
+	out := make(map[string]any, len(a))
+	for k, v := range a {
+		out[k] = v
+	}
+	if out["type"] == "scroll" {
+		if v, ok := out["scrollX"]; ok {
+			out["scroll_x"] = v
+			delete(out, "scrollX")
+		}
+		if v, ok := out["scrollY"]; ok {
+			out["scroll_y"] = v
+			delete(out, "scrollY")
+		}
+	}
+	return out
 }
 
 // parseResponsesOutputs converts the output array into Content parts.
@@ -616,12 +781,70 @@ func (m *openaiResponsesModel) parseResponsesOutputs(outputs []any) ([]Content, 
 			name, _ := item["name"].(string)
 			args, _ := item["arguments"].(string)
 			callID, _ := item["call_id"].(string)
+			embed := ToolCallContentEmbed{
+				ToolCallID: callID,
+				ToolName:   name,
+				Input:      json.RawMessage(args),
+			}
+			if caller := mapResponseToolCaller(item["caller"]); caller != nil {
+				embed.ProviderMetadata = ProviderMetadata{"openai": map[string]any{"caller": caller}}
+			}
 			out = append(out, ToolCallContent{
-				ToolCallContentEmbed: ToolCallContentEmbed{
+				ToolCallContentEmbed: embed,
+			})
+		case "program":
+			callID, _ := item["call_id"].(string)
+			code, _ := item["code"].(string)
+			fingerprint, _ := item["fingerprint"].(string)
+			id, _ := item["id"].(string)
+			inputBytes, _ := json.Marshal(map[string]any{"code": code, "fingerprint": fingerprint})
+			embed := ToolCallContentEmbed{
+				ToolCallID: callID,
+				ToolName:   "programmatic_tool_calling",
+				Input:      inputBytes,
+			}
+			if id != "" {
+				embed.ProviderMetadata = ProviderMetadata{"openai": map[string]any{"itemId": id}}
+			}
+			out = append(out, ToolCallContent{
+				ToolCallContentEmbed: embed,
+				ProviderExecuted:     true,
+			})
+		case "program_output":
+			callID, _ := item["call_id"].(string)
+			result, _ := item["result"].(string)
+			status, _ := item["status"].(string)
+			value, _ := json.Marshal(map[string]any{"result": result, "status": status})
+			id, _ := item["id"].(string)
+			tres := ToolResultContent{
+				ToolResultContent: openaicompatible.ToolResultContent{
 					ToolCallID: callID,
-					ToolName:   name,
-					Input:      json.RawMessage(args),
+					Output:     ToolResultOutput{Type: "json", Value: value},
 				},
+				ToolName: "programmatic_tool_calling",
+			}
+			if id != "" {
+				tres.ProviderMetadata = ProviderMetadata{"openai": map[string]any{"itemId": id}}
+			}
+			out = append(out, tres)
+		case "computer_call":
+			callID, _ := item["call_id"].(string)
+			id, _ := item["id"].(string)
+			if callID == "" {
+				callID = id
+			}
+			inputBytes, _ := json.Marshal(mapComputerCallInput(item))
+			embed := ToolCallContentEmbed{
+				ToolCallID: callID,
+				ToolName:   "computer",
+				Input:      inputBytes,
+			}
+			if id != "" {
+				embed.ProviderMetadata = ProviderMetadata{"openai": map[string]any{"itemId": id}}
+			}
+			out = append(out, ToolCallContent{
+				ToolCallContentEmbed: embed,
+				ProviderExecuted:     true,
 			})
 		case "custom_tool_call":
 			name, _ := item["name"].(string)
@@ -1157,6 +1380,18 @@ func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMes
 				out = append(out, nativeShellCallItem(part))
 				continue
 			}
+			if part.ToolName == "computer" {
+				if callItem, ok := wireComputerCallItem(part); ok {
+					out = append(out, callItem)
+					continue
+				}
+			}
+			if part.ToolName == "programmatic_tool_calling" {
+				if programItem, ok := wireProgramItem(part); ok {
+					out = append(out, programItem)
+					continue
+				}
+			}
 			item := map[string]any{
 				"type":      "function_call",
 				"call_id":   part.ToolCallID,
@@ -1165,6 +1400,9 @@ func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMes
 			}
 			if id, ok := part.ProviderMetadata["itemId"].(string); ok && id != "" {
 				item["id"] = id
+			}
+			if caller := responseToolCaller(part.ProviderOptions, part.ProviderMetadata); caller != nil {
+				item["caller"] = caller
 			}
 			out = append(out, item)
 		case ToolApprovalResponse:
@@ -1207,6 +1445,209 @@ func nativeShellCallItem(part ToolCallContent) map[string]any {
 	} else if openaiPM, ok := part.ProviderMetadata["openai"].(map[string]any); ok {
 		if id, ok := openaiPM["itemId"].(string); ok && id != "" {
 			item["id"] = id
+		}
+	}
+	return item
+}
+
+// responseItemID returns the wire item id round-tripped from a tool
+// call's provider metadata (top-level or openai-nested), or "".
+func responseItemID(part ToolCallContentEmbed) string {
+	if id, ok := part.ProviderMetadata["itemId"].(string); ok && id != "" {
+		return id
+	}
+	if openaiPM, ok := part.ProviderMetadata["openai"].(map[string]any); ok {
+		if id, ok := openaiPM["itemId"].(string); ok && id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// wireComputerCallItem encodes an assistant computer tool call as a
+// computer_call input item. The call input carries the SDK-shape
+// {actions, pendingSafetyChecks, status} payload.
+func wireComputerCallItem(part ToolCallContent) (map[string]any, bool) {
+	var input map[string]any
+	if len(part.Input) > 0 {
+		if err := json.Unmarshal(part.Input, &input); err != nil {
+			return nil, false
+		}
+	}
+	if input == nil {
+		input = map[string]any{}
+	}
+	var actions []any
+	if list, ok := input["actions"].([]any); ok {
+		for _, a := range list {
+			if am, ok := a.(map[string]any); ok {
+				actions = append(actions, wireComputerAction(am))
+			}
+		}
+	}
+	if actions == nil {
+		actions = []any{}
+	}
+	var checks []any
+	if list, ok := input["pendingSafetyChecks"].([]any); ok {
+		for _, c := range list {
+			if cm, ok := c.(map[string]any); ok {
+				checks = append(checks, wireSafetyCheck(cm))
+			}
+		}
+	}
+	if checks == nil {
+		checks = []any{}
+	}
+	status, _ := input["status"].(string)
+	item := map[string]any{
+		"type":                  "computer_call",
+		"call_id":               part.ToolCallID,
+		"status":                status,
+		"actions":               actions,
+		"pending_safety_checks": checks,
+	}
+	if id := responseItemID(part.ToolCallContentEmbed); id != "" {
+		item["id"] = id
+	}
+	return item, true
+}
+
+// wireSafetyCheck converts an SDK-shape safety check ({id, code,
+// message}) to its wire form.
+func wireSafetyCheck(cm map[string]any) map[string]any {
+	check := map[string]any{}
+	if id, ok := cm["id"].(string); ok {
+		check["id"] = id
+	}
+	if code, ok := cm["code"].(string); ok && code != "" {
+		check["code"] = code
+	}
+	if msg, ok := cm["message"].(string); ok && msg != "" {
+		check["message"] = msg
+	}
+	return check
+}
+
+// wireProgramItem encodes an assistant programmatic_tool_calling tool
+// call as a program input item.
+func wireProgramItem(part ToolCallContent) (map[string]any, bool) {
+	var input map[string]any
+	if len(part.Input) > 0 {
+		if err := json.Unmarshal(part.Input, &input); err != nil {
+			return nil, false
+		}
+	}
+	if input == nil {
+		return nil, false
+	}
+	code, _ := input["code"].(string)
+	fingerprint, _ := input["fingerprint"].(string)
+	item := map[string]any{
+		"type":        "program",
+		"call_id":     part.ToolCallID,
+		"code":        code,
+		"fingerprint": fingerprint,
+	}
+	if id := responseItemID(part.ToolCallContentEmbed); id != "" {
+		item["id"] = id
+	} else {
+		item["id"] = part.ToolCallID
+	}
+	return item, true
+}
+
+// toolResultJSON decodes a tool result's JSON output value into a map.
+func toolResultJSON(part ToolResultContent) map[string]any {
+	var raw []byte
+	switch v := part.Output.Value.(type) {
+	case nil:
+		return nil
+	case json.RawMessage:
+		raw = []byte(v)
+	case []byte:
+		raw = v
+	case string:
+		raw = []byte(v)
+	default:
+		raw, _ = json.Marshal(v)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return m
+}
+
+// wireComputerCallOutput encodes a computer tool result as a
+// computer_call_output input item.
+func wireComputerCallOutput(part ToolResultContent) map[string]any {
+	item := map[string]any{
+		"type":    "computer_call_output",
+		"call_id": part.ToolCallID,
+	}
+	payload := toolResultJSON(part)
+	if payload == nil {
+		return item
+	}
+	output, _ := payload["output"].(map[string]any)
+	if output == nil {
+		return item
+	}
+	shot := map[string]any{"type": "computer_screenshot"}
+	if v, ok := output["imageUrl"].(string); ok && v != "" {
+		shot["image_url"] = v
+	} else if v, ok := output["image_url"].(string); ok && v != "" {
+		shot["image_url"] = v
+	}
+	if v, ok := output["fileId"].(string); ok && v != "" {
+		shot["file_id"] = v
+	} else if v, ok := output["file_id"].(string); ok && v != "" {
+		shot["file_id"] = v
+	}
+	if v, ok := output["detail"].(string); ok && v != "" {
+		shot["detail"] = v
+	}
+	item["output"] = shot
+	if list, ok := payload["acknowledgedSafetyChecks"].([]any); ok {
+		var checks []any
+		for _, c := range list {
+			if cm, ok := c.(map[string]any); ok {
+				checks = append(checks, wireSafetyCheck(cm))
+			}
+		}
+		if checks != nil {
+			item["acknowledged_safety_checks"] = checks
+		}
+	}
+	return item
+}
+
+// wireProgramOutput encodes a programmatic_tool_calling tool result as
+// a program_output input item.
+func wireProgramOutput(part ToolResultContent) map[string]any {
+	item := map[string]any{
+		"type":    "program_output",
+		"call_id": part.ToolCallID,
+	}
+	id := part.ToolCallID
+	if openaiOpts, ok := part.ProviderOptions["openai"].(map[string]any); ok {
+		if v, ok := openaiOpts["itemId"].(string); ok && v != "" {
+			id = v
+		}
+	}
+	if openaiMeta, ok := part.ProviderMetadata["openai"].(map[string]any); ok {
+		if v, ok := openaiMeta["itemId"].(string); ok && v != "" {
+			id = v
+		}
+	}
+	item["id"] = id
+	if payload := toolResultJSON(part); payload != nil {
+		if v, ok := payload["result"].(string); ok {
+			item["result"] = v
+		}
+		if v, ok := payload["status"].(string); ok {
+			item["status"] = v
 		}
 	}
 	return item
@@ -1263,6 +1704,10 @@ func (m *openaiResponsesModel) convertResponsesToolMessage(msg ToolMessage, hasP
 				"status":  "completed",
 				"output":  stringifyToolResult(part.Output),
 			})
+		case "computer":
+			out = append(out, wireComputerCallOutput(part))
+		case "programmatic_tool_calling":
+			out = append(out, wireProgramOutput(part))
 		case "tool_search":
 			if hasProviderToolSearch {
 				out = append(out, map[string]any{
@@ -1289,6 +1734,9 @@ func (m *openaiResponsesModel) convertResponsesToolMessage(msg ToolMessage, hasP
 				"type":    "function_call_output",
 				"call_id": part.ToolCallID,
 				"output":  stringifyToolResult(part.Output),
+			}
+			if caller := responseToolCaller(part.ProviderOptions, part.ProviderMetadata); caller != nil {
+				item["caller"] = caller
 			}
 			applyToolResultBreakpoint(item, part)
 			out = append(out, item)
@@ -1457,7 +1905,7 @@ func buildResponsesProviderTool(t Tool) (map[string]any, []Warning, error) {
 			tool["external_web_access"] = v
 		}
 		if v, ok := args["filters"].(map[string]any); ok {
-			tool["filters"] = v
+			tool["filters"] = normalizeWebSearchFilters(v)
 		}
 		if v, ok := args["searchContextSize"].(string); ok && v != "" {
 			tool["search_context_size"] = v
@@ -1520,6 +1968,24 @@ func buildResponsesProviderTool(t Tool) (map[string]any, []Warning, error) {
 		return tool, nil, nil
 	case "applyPatch":
 		return map[string]any{"type": "apply_patch"}, nil, nil
+	case "computer":
+		tool := map[string]any{"type": "computer"}
+		if v, ok := args["displayWidth"].(float64); ok {
+			tool["display_width"] = int(v)
+		} else if v, ok := args["displayWidth"].(int); ok {
+			tool["display_width"] = v
+		}
+		if v, ok := args["displayHeight"].(float64); ok {
+			tool["display_height"] = int(v)
+		} else if v, ok := args["displayHeight"].(int); ok {
+			tool["display_height"] = v
+		}
+		if v, ok := args["environment"].(string); ok && v != "" {
+			tool["environment"] = v
+		}
+		return tool, nil, nil
+	case "programmatic_tool_calling":
+		return map[string]any{"type": "programmatic_tool_calling"}, nil, nil
 	case "mcp":
 		tool := map[string]any{"type": "mcp", "server_label": args["serverLabel"], "server_url": args["serverUrl"]}
 		var toolWarns []Warning
@@ -1599,6 +2065,42 @@ func normalizeMCPAllowedTools(v any) (any, []Warning) {
 		}
 	}
 	return nil, unrecognized
+}
+
+// normalizeWebSearchFilters maps the SDK's camelCase web_search filter
+// keys to the API's snake_case wire names (allowed_domains,
+// blocked_domains). Maps carrying neither key pass through untouched.
+func normalizeWebSearchFilters(m map[string]any) map[string]any {
+	allowed, hasAllowed := webSearchFilterList(m, "allowedDomains", "allowed_domains")
+	blocked, hasBlocked := webSearchFilterList(m, "blockedDomains", "blocked_domains")
+	if !hasAllowed && !hasBlocked {
+		return m
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	if hasAllowed {
+		out["allowed_domains"] = allowed
+		delete(out, "allowedDomains")
+	}
+	if hasBlocked {
+		out["blocked_domains"] = blocked
+		delete(out, "blockedDomains")
+	}
+	return out
+}
+
+// webSearchFilterList returns the string list under the first present key.
+func webSearchFilterList(m map[string]any, keys ...string) ([]string, bool) {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			if list, ok := stringSliceValue(v); ok {
+				return list, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // stringSliceValue returns v as a []string when v is a slice or array of
