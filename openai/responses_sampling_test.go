@@ -49,7 +49,7 @@ func TestResponsesForwardsSampling(t *testing.T) {
 // Verifies that temperature/top_p are stripped on reasoning models that
 // don't support non-reasoning parameters.
 func TestResponsesStripsSamplingOnReasoning(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"o1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"o1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	temp := 0.7
@@ -74,7 +74,7 @@ func TestResponsesStripsSamplingOnReasoning(t *testing.T) {
 // Verifies that the responses API forwards reasoning effort and summary
 // when opts.Reasoning is supplied.
 func TestResponsesForwardsReasoning(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-5","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-5","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	effort := "high"
@@ -102,7 +102,7 @@ func TestResponsesForwardsReasoning(t *testing.T) {
 // Verifies that the responses API includes previous_response_id when
 // supplied.
 func TestResponsesForwardsPreviousResponseID(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	prevID := "resp_abc"

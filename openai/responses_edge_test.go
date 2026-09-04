@@ -302,23 +302,24 @@ func TestResponsesProviderError(t *testing.T) {
 	}
 }
 
-// TestResponsesParseEmptyOutput verifies an empty output array yields
-// no content and no warnings.
+// TestResponsesParseEmptyOutput verifies an empty or absent output
+// array is rejected with InvalidResponseDataError.
 func TestResponsesParseEmptyOutput(t *testing.T) {
-	respBody := `{"id":"resp-1","status":"completed","output":[]}`
-	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
-	p := newOpenAIForTest(f, "https://example.test/v1")
-	res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
-		Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}},
-	})
-	if err != nil {
-		t.Fatalf("DoGenerate: %v", err)
-	}
-	if len(res.Content) != 0 {
-		t.Errorf("expected 0 content, got %d", len(res.Content))
-	}
-	if len(res.Warnings) != 0 {
-		t.Errorf("expected 0 warnings, got %v", res.Warnings)
+	for _, respBody := range []string{
+		`{"id":"resp-1","status":"completed","output":[]}`,
+		`{"id":"resp-1","status":"completed"}`,
+	} {
+		f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
+		p := newOpenAIForTest(f, "https://example.test/v1")
+		_, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
+			Messages: []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}},
+		})
+		if err == nil {
+			t.Fatalf("expected error for %s", respBody)
+		}
+		if _, ok := err.(InvalidResponseDataError); !ok {
+			t.Errorf("expected InvalidResponseDataError for %s, got %T: %v", respBody, err, err)
+		}
 	}
 }
 
@@ -342,7 +343,7 @@ func TestResponsesParseNonMapOutputSkipped(t *testing.T) {
 // TestResponsesServiceTierMetadata verifies service_tier is captured in
 // provider metadata.
 func TestResponsesServiceTierMetadata(t *testing.T) {
-	respBody := `{"id":"resp-1","status":"completed","service_tier":"priority","output":[]}`
+	respBody := `{"id":"resp-1","status":"completed","service_tier":"priority","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -448,7 +449,7 @@ func TestResponsesParseMessageWithAnnotations(t *testing.T) {
 
 // TestResponsesUsageCachedTokens verifies cached_tokens is captured.
 func TestResponsesUsageCachedTokens(t *testing.T) {
-	respBody := `{"id":"resp-1","status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"input_tokens_details":{"cached_tokens":7}}}`
+	respBody := `{"id":"resp-1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"input_tokens_details":{"cached_tokens":7}}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -464,7 +465,7 @@ func TestResponsesUsageCachedTokens(t *testing.T) {
 
 // TestResponsesUsageReasoningTokens verifies reasoning_tokens is captured.
 func TestResponsesUsageReasoningTokens(t *testing.T) {
-	respBody := `{"id":"resp-1","status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"output_tokens_details":{"reasoning_tokens":3}}}`
+	respBody := `{"id":"resp-1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"output_tokens_details":{"reasoning_tokens":3}}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -480,7 +481,7 @@ func TestResponsesUsageReasoningTokens(t *testing.T) {
 
 // TestResponsesCreatedAt verifies created_at maps to Timestamp.
 func TestResponsesCreatedAt(t *testing.T) {
-	respBody := `{"id":"resp-1","created_at":1700000000,"status":"completed","output":[]}`
+	respBody := `{"id":"resp-1","created_at":1700000000,"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{

@@ -161,6 +161,11 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 		reasoning["summary"] = v
 	}
 	if len(reasoning) > 0 {
+		// Default the summary when reasoning is enabled but the caller
+		// set no explicit summary.
+		if _, ok := reasoning["summary"]; !ok {
+			reasoning["summary"] = "detailed"
+		}
 		body["reasoning"] = reasoning
 	}
 
@@ -226,7 +231,7 @@ func (m *openaiResponsesModel) buildResponsesRequest(opts ResponsesGenerateOptio
 	}
 
 	// Build input items from messages.
-	input, inputWarnings, err := m.convertResponsesInput(opts.Messages, chatOptions, body)
+	input, inputWarnings, err := m.convertResponsesInput(opts.Messages, chatOptions, body, hasNativeToolSearch(opts.Tools))
 	if err != nil {
 		return nil, warnings, err
 	}
@@ -399,15 +404,17 @@ func (m *openaiResponsesModel) parseResponsesResponse(body, requestBody []byte) 
 	if usage, ok := raw["usage"].(map[string]any); ok {
 		result.Usage = parseResponsesUsage(usage)
 	}
+	outputs, ok := raw["output"].([]any)
+	if !ok || len(outputs) == 0 {
+		return nil, InvalidResponseDataError{Message: "response has no output content"}
+	}
 	if fr, ok := raw["status"].(string); ok {
 		hasToolCall := false
-		if outputs, ok := raw["output"].([]any); ok {
-			for _, o := range outputs {
-				if m, ok := o.(map[string]any); ok {
-					t, _ := m["type"].(string)
-					if t == "function_call" || t == "custom_tool_call" {
-						hasToolCall = true
-					}
+		for _, o := range outputs {
+			if m, ok := o.(map[string]any); ok {
+				t, _ := m["type"].(string)
+				if t == "function_call" || t == "custom_tool_call" {
+					hasToolCall = true
 				}
 			}
 		}
@@ -427,13 +434,11 @@ func (m *openaiResponsesModel) parseResponsesResponse(body, requestBody []byte) 
 	if len(openaiPM) > 0 {
 		result.ProviderMetadata["openai"] = openaiPM
 	}
-	if outputs, ok := raw["output"].([]any); ok {
-		content, pm, warns := m.parseResponsesOutputs(outputs)
-		result.Content = append(result.Content, content...)
-		result.Warnings = append(result.Warnings, warns...)
-		for k, v := range pm {
-			result.ProviderMetadata[k] = v
-		}
+	content, pm, warns := m.parseResponsesOutputs(outputs)
+	result.Content = append(result.Content, content...)
+	result.Warnings = append(result.Warnings, warns...)
+	for k, v := range pm {
+		result.ProviderMetadata[k] = v
 	}
 	return result, nil
 }
@@ -780,8 +785,11 @@ func mustJSON(v any) json.RawMessage {
 }
 
 // convertResponsesInput converts a chat-style []Message into a Responses
-// `input` array. It applies the rules in the spec.
-func (m *openaiResponsesModel) convertResponsesInput(messages []Message, chatOptions map[string]any, body map[string]any) ([]any, []Warning, error) {
+// `input` array. It applies the rules in the spec. hasProviderToolSearch
+// reports whether the request declares the native tool_search provider
+// tool; only then does a "tool_search" tool result map to a native
+// tool_search_output item.
+func (m *openaiResponsesModel) convertResponsesInput(messages []Message, chatOptions map[string]any, body map[string]any, hasProviderToolSearch bool) ([]any, []Warning, error) {
 	mode := "system"
 	if v, ok := chatOptions["systemMessageMode"].(string); ok && v != "" {
 		mode = v
@@ -820,7 +828,7 @@ func (m *openaiResponsesModel) convertResponsesInput(messages []Message, chatOpt
 			}
 			out = append(out, converted...)
 		case ToolMessage:
-			converted, err := m.convertResponsesToolMessage(part)
+			converted, err := m.convertResponsesToolMessage(part, hasProviderToolSearch)
 			if err != nil {
 				return nil, warnings, err
 			}
@@ -1053,7 +1061,25 @@ func (m *openaiResponsesModel) convertResponsesAssistantMessage(msg AssistantMes
 	return out, warnings, nil
 }
 
-func (m *openaiResponsesModel) convertResponsesToolMessage(msg ToolMessage) ([]any, error) {
+// hasNativeToolSearch reports whether the request declares the native
+// tool_search provider tool. Only then is a ToolMessage result named
+// "tool_search" treated as a client-executed native tool search.
+func hasNativeToolSearch(tools []Tool) bool {
+	for _, t := range tools {
+		if t.Type != "provider" {
+			continue
+		}
+		if len(t.ID) > len("openai.") && t.ID[:len("openai.")] == "openai." {
+			switch t.ID[len("openai."):] {
+			case "toolSearch", "tool_search":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (m *openaiResponsesModel) convertResponsesToolMessage(msg ToolMessage, hasProviderToolSearch bool) ([]any, error) {
 	var out []any
 	for _, content := range msg.Content {
 		part, ok := content.(ToolResultContent)
@@ -1087,12 +1113,23 @@ func (m *openaiResponsesModel) convertResponsesToolMessage(msg ToolMessage) ([]a
 				"output":  stringifyToolResult(part.Output),
 			})
 		case "tool_search":
+			if hasProviderToolSearch {
+				out = append(out, map[string]any{
+					"type":      "tool_search_output",
+					"execution": "client",
+					"call_id":   part.ToolCallID,
+					"status":    "completed",
+					"tools":     part.Output.Value,
+				})
+				continue
+			}
+			// An ordinary client function literally named "tool_search"
+			// is not the native provider tool: replay it as a regular
+			// function_call_output item.
 			out = append(out, map[string]any{
-				"type":      "tool_search_output",
-				"execution": "client",
-				"call_id":   part.ToolCallID,
-				"status":    "completed",
-				"tools":     part.Output.Value,
+				"type":    "function_call_output",
+				"call_id": part.ToolCallID,
+				"output":  stringifyToolResult(part.Output),
 			})
 		default:
 			out = append(out, map[string]any{
@@ -1178,8 +1215,19 @@ func buildResponsesFunctionTool(t Tool) (map[string]any, []Warning, error) {
 	if t.Description != "" {
 		tool["description"] = t.Description
 	}
-	if t.InputSchema != nil {
-		tool["parameters"] = t.InputSchema
+	// Strict mode (the default) requires an object schema: serialize {}
+	// instead of a null or omitted parameters payload.
+	strict := t.Strict == nil || *t.Strict
+	schema := t.InputSchema
+	if schema != nil {
+		if raw, err := json.Marshal(schema); err != nil || string(raw) == "null" {
+			schema = nil
+		}
+	}
+	if schema != nil {
+		tool["parameters"] = schema
+	} else if strict {
+		tool["parameters"] = map[string]any{}
 	}
 	if t.Strict != nil {
 		tool["strict"] = *t.Strict
@@ -1299,7 +1347,12 @@ func buildResponsesProviderTool(t Tool) (map[string]any, []Warning, error) {
 		return map[string]any{"type": "apply_patch"}, nil, nil
 	case "mcp":
 		tool := map[string]any{"type": "mcp", "server_label": args["serverLabel"], "server_url": args["serverUrl"]}
-		for _, key := range []string{"allowedTools", "authorization", "connectorId", "headers", "requireApproval", "serverDescription"} {
+		if v, ok := args["allowedTools"]; ok {
+			if normalized := normalizeMCPAllowedTools(v); normalized != nil {
+				tool["allowed_tools"] = normalized
+			}
+		}
+		for _, key := range []string{"authorization", "connectorId", "headers", "requireApproval", "serverDescription"} {
 			if v, ok := args[key]; ok {
 				tool[camelToSnake(key)] = v
 			}
@@ -1329,6 +1382,63 @@ func buildResponsesProviderTool(t Tool) (map[string]any, []Warning, error) {
 	default:
 		return nil, nil, InvalidPromptError{Message: "unsupported provider tool kind " + kind}
 	}
+}
+
+// normalizeMCPAllowedTools normalizes the MCP allowedTools argument into
+// wire shape: either a plain array of tool names, or
+// {"tool_names": [...]}. It accepts []string / []any slices as well as
+// struct / map forms carrying tool_names (or toolNames). Unrecognized
+// values pass through unchanged.
+func normalizeMCPAllowedTools(v any) any {
+	if v == nil {
+		return nil
+	}
+	if names, ok := stringSliceValue(v); ok {
+		return names
+	}
+	var m map[string]any
+	switch t := v.(type) {
+	case map[string]any:
+		m = t
+	default:
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return v
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return v
+		}
+		m = decoded
+	}
+	for _, key := range []string{"tool_names", "toolNames"} {
+		if names, ok := m[key]; ok {
+			if list, ok := stringSliceValue(names); ok {
+				return map[string]any{"tool_names": list}
+			}
+		}
+	}
+	return v
+}
+
+// stringSliceValue returns v as a []string when v is a slice or array of
+// strings ([]string or []any with all-string elements).
+func stringSliceValue(v any) ([]string, bool) {
+	switch t := v.(type) {
+	case []string:
+		return t, true
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, x := range t {
+			s, ok := x.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 func camelToSnake(s string) string {

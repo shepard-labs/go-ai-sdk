@@ -9,7 +9,7 @@ import (
 // TestResponsesMCPToolWireFormat verifies that an openai.mcp provider
 // tool is converted to the wire format with snake_case keys.
 func TestResponsesMCPToolWireFormat(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	url := "https://mcp.example.com"
@@ -65,7 +65,7 @@ func TestResponsesMCPToolWireFormat(t *testing.T) {
 // TestResponsesMCPToolWithAllowedTools verifies the allowed_tools field
 // is forwarded in the wire format.
 func TestResponsesMCPToolWithAllowedTools(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	url := "https://mcp.example.com"
@@ -97,7 +97,7 @@ func TestResponsesMCPToolWithAllowedTools(t *testing.T) {
 // TestResponsesMCPToolWithHeaders verifies the headers field is
 // forwarded (typically a map[string]string).
 func TestResponsesMCPToolWithHeaders(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	url := "https://mcp.example.com"

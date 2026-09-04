@@ -79,7 +79,7 @@ func TestResponsesGenerateFunctionCall(t *testing.T) {
 // TestResponsesSystemMessageModeSystem verifies the default "system" mode
 // emits a system-role input item.
 func TestResponsesSystemMessageModeSystem(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -108,7 +108,7 @@ func TestResponsesSystemMessageModeSystem(t *testing.T) {
 // TestResponsesSystemMessageModeDeveloper verifies the "developer" mode
 // appends to body["instructions"].
 func TestResponsesSystemMessageModeDeveloper(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -132,7 +132,7 @@ func TestResponsesSystemMessageModeDeveloper(t *testing.T) {
 // TestResponsesSystemMessageModeRemove verifies the "remove" mode drops
 // system messages from the input.
 func TestResponsesSystemMessageModeRemove(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -160,7 +160,7 @@ func TestResponsesSystemMessageModeRemove(t *testing.T) {
 
 // TestResponsesGenerateWithToolChoiceAuto verifies the auto tool choice.
 func TestResponsesGenerateWithToolChoiceAuto(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -184,7 +184,7 @@ func TestResponsesGenerateWithToolChoiceAuto(t *testing.T) {
 // is serialized as shell_call_output with the max_wait_ms / shell_cmd
 // fields.
 func TestResponsesToolMessageShellOutput(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -226,7 +226,7 @@ func TestResponsesToolMessageShellOutput(t *testing.T) {
 // TestResponsesToolMessageApplyPatchOutput verifies apply_patch tool result
 // is serialized as apply_patch_call_output.
 func TestResponsesToolMessageApplyPatchOutput(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -259,7 +259,7 @@ func TestResponsesToolMessageApplyPatchOutput(t *testing.T) {
 // TestResponsesToolMessageLocalShellOutput verifies local_shell tool
 // result is serialized as local_shell_call_output.
 func TestResponsesToolMessageLocalShellOutput(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -289,7 +289,7 @@ func TestResponsesToolMessageLocalShellOutput(t *testing.T) {
 // TestResponsesToolMessageDefaultFunctionCallOutput verifies the default
 // branch (function_call_output) is used for non-special tool names.
 func TestResponsesToolMessageDefaultFunctionCallOutput(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -322,7 +322,7 @@ func TestResponsesToolMessageDefaultFunctionCallOutput(t *testing.T) {
 // TestResponsesGenerateWithToolChoiceRequired verifies the required tool
 // choice.
 func TestResponsesGenerateWithToolChoiceRequired(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{

@@ -234,7 +234,7 @@ func (m *openaiChatLanguageModel) convertAssistantMessage(msg AssistantMessage) 
 				"type": "function",
 				"function": map[string]any{
 					"name":      part.ToolName,
-					"arguments": string(part.Input),
+					"arguments": chatToolCallArguments(part.Input),
 				},
 			}
 			toolCalls = append(toolCalls, tc)
@@ -246,7 +246,7 @@ func (m *openaiChatLanguageModel) convertAssistantMessage(msg AssistantMessage) 
 					"type": "function",
 					"function": map[string]any{
 						"name":      tc.ToolName,
-						"arguments": string(tc.Input),
+						"arguments": chatToolCallArguments(tc.Input),
 					},
 				}
 				toolCalls = append(toolCalls, tcMap)
@@ -266,6 +266,16 @@ func (m *openaiChatLanguageModel) convertAssistantMessage(msg AssistantMessage) 
 		out["content"] = text.String()
 	}
 	return out, nil
+}
+
+// chatToolCallArguments renders tool-call input as the wire arguments
+// string. Empty input becomes "{}" so strict-mode requests never send a
+// null or empty arguments payload.
+func chatToolCallArguments(input json.RawMessage) string {
+	if strings.TrimSpace(string(input)) == "" {
+		return "{}"
+	}
+	return string(input)
 }
 
 func convertToolMessage(msg ToolMessage) ([]map[string]any, error) {

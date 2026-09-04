@@ -2,6 +2,7 @@ package openai
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -72,7 +73,12 @@ type openaiProvider struct {
 
 // CreateOpenAI creates an OpenAI provider.
 func CreateOpenAI(settings ProviderSettings) Provider {
-	baseURL := strings.TrimRight(valueOrEnv(settings.BaseURL, "OPENAI_BASE_URL"), "/")
+	rawBaseURL := valueOrEnv(settings.BaseURL, "OPENAI_BASE_URL")
+	var baseURLErr error
+	if rawBaseURL != "" && strings.TrimSpace(rawBaseURL) == "" {
+		baseURLErr = fmt.Errorf("openai: baseURL must not be empty or whitespace-only")
+	}
+	baseURL := strings.TrimRight(rawBaseURL, "/")
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
@@ -137,7 +143,9 @@ func CreateOpenAI(settings ProviderSettings) Provider {
 	if p.fetch == nil {
 		p.fetch = openaiDefaultHTTPClient()
 	}
-	if apiKey == "" {
+	if baseURLErr != nil {
+		p.err = baseURLErr
+	} else if apiKey == "" {
 		p.err = ErrMissingAPIKey
 	}
 	p.fileIDPrefixes = settings.FileIDPrefixes

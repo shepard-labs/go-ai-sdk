@@ -84,7 +84,7 @@ func TestResponsesForwardsLogprobs(t *testing.T) {
 // Verifies that the responses API strips service_tier "flex" on models
 // that don't support flex processing.
 func TestResponsesRejectsFlexServiceTierOnNonFlex(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"o1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"o1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("o1").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -120,7 +120,7 @@ func TestResponsesForwardsStoreAndMetadata(t *testing.T) {
 // Verifies that store=false in the Responses API request body is honored
 // when supplied.
 func TestResponsesForwardsStoreFalse(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-5","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-5","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	storeFalse := false

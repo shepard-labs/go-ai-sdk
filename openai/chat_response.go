@@ -136,6 +136,9 @@ func (m *openaiChatLanguageModel) parseChatResponse(body []byte, requestBody []b
 // response into a ToolCallContent.
 func convertChatToolCallFromResponse(tc map[string]any) (ToolCallContent, error) {
 	id, _ := tc["id"].(string)
+	if id == "" {
+		return ToolCallContent{}, InvalidResponseDataError{Message: "tool_call missing id"}
+	}
 	fn, _ := tc["function"].(map[string]any)
 	name, _ := fn["name"].(string)
 	args, _ := fn["arguments"].(string)

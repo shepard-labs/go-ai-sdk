@@ -9,7 +9,7 @@ import (
 // TestResponsesDropsNonOpenAIReasoning verifies that a ReasoningContent
 // with no ItemID and no EncryptedContent is dropped with a warning.
 func TestResponsesDropsNonOpenAIReasoning(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -34,7 +34,7 @@ func TestResponsesDropsNonOpenAIReasoning(t *testing.T) {
 // TestResponsesKeepsReasoningWithEncryptedContent verifies that a
 // ReasoningContent with EncryptedContent is preserved (not dropped).
 func TestResponsesKeepsReasoningWithEncryptedContent(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	res, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{

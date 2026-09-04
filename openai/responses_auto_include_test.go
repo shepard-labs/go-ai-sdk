@@ -9,7 +9,7 @@ import (
 // TestResponsesAutoIncludeLogprobs verifies that the SDK auto-adds
 // "message.output_text.logprobs" to include when logprobs is requested.
 func TestResponsesAutoIncludeLogprobs(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -37,7 +37,7 @@ func TestResponsesAutoIncludeLogprobs(t *testing.T) {
 // TestResponsesAutoIncludeWebSearch verifies that web_search tool
 // triggers "web_search_call.action.sources" auto-include.
 func TestResponsesAutoIncludeWebSearch(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	_, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -55,7 +55,7 @@ func TestResponsesAutoIncludeWebSearch(t *testing.T) {
 // TestResponsesAutoIncludeCodeInterpreter verifies that code_interpreter
 // tool triggers "code_interpreter_call.outputs" auto-include.
 func TestResponsesAutoIncludeCodeInterpreter(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	result, err := p.Responses("gpt-4o").DoGenerate(context.Background(), ResponsesGenerateOptions{
@@ -83,7 +83,7 @@ func TestResponsesAutoIncludeCodeInterpreter(t *testing.T) {
 // TestResponsesAutoIncludeReasoningEncrypted verifies that store=false
 // triggers "reasoning.encrypted_content" auto-include.
 func TestResponsesAutoIncludeReasoningEncrypted(t *testing.T) {
-	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	respBody := `{"id":"r","created_at":1,"model":"gpt-4o","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 	f := &recordingFetcher{responses: []*http.Response{response(200, respBody)}}
 	p := newOpenAIForTest(f, "https://example.test/v1")
 	storeFalse := false
