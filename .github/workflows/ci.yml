@@ -37,6 +37,20 @@ jobs:
             go.sum
             */go.sum
 
+      - name: Checkout go-clients sibling (local replace target)
+        if: matrix.module == '.'
+        uses: actions/checkout@v6
+        with:
+          repository: shepard-labs/go-clients
+          # Pinned to the commit local dev builds against (../go-clients).
+          # Bump together with the sibling checkout when updating the dep.
+          ref: 671d116446ef1eed7b3afca1bcc319e7c7757275
+          path: .tmp-go-clients
+
+      - name: Move go-clients to sibling replace path
+        if: matrix.module == '.'
+        run: mv .tmp-go-clients "$(dirname "$GITHUB_WORKSPACE")/go-clients"
+
       - name: Check formatting
         if: matrix.module == '.'
         run: test -z "$(gofmt -l .)"
@@ -80,6 +94,20 @@ jobs:
             go.sum
             */go.sum
 
+      - name: Checkout go-clients sibling (local replace target)
+        if: matrix.module == '.'
+        uses: actions/checkout@v6
+        with:
+          repository: shepard-labs/go-clients
+          # Pinned to the commit local dev builds against (../go-clients).
+          # Bump together with the sibling checkout when updating the dep.
+          ref: 671d116446ef1eed7b3afca1bcc319e7c7757275
+          path: .tmp-go-clients
+
+      - name: Move go-clients to sibling replace path
+        if: matrix.module == '.'
+        run: mv .tmp-go-clients "$(dirname "$GITHUB_WORKSPACE")/go-clients"
+
       - name: Run staticcheck
         working-directory: ${{ matrix.module }}
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
@@ -112,6 +140,20 @@ jobs:
           cache-dependency-path: |
             go.sum
             */go.sum
+
+      - name: Checkout go-clients sibling (local replace target)
+        if: matrix.module == '.'
+        uses: actions/checkout@v6
+        with:
+          repository: shepard-labs/go-clients
+          # Pinned to the commit local dev builds against (../go-clients).
+          # Bump together with the sibling checkout when updating the dep.
+          ref: 671d116446ef1eed7b3afca1bcc319e7c7757275
+          path: .tmp-go-clients
+
+      - name: Move go-clients to sibling replace path
+        if: matrix.module == '.'
+        run: mv .tmp-go-clients "$(dirname "$GITHUB_WORKSPACE")/go-clients"
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
