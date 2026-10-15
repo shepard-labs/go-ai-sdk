@@ -1911,3 +1911,385 @@ func TestUnknownProviderToolPublicCallsFailBeforeTransport(t *testing.T) {
 		})
 	}
 }
+
+func TestBetweenToolsThinkingBuildsWireTypeAndClampsEffort(t *testing.T) {
+	thinking, warnings := buildThinking(&ThinkingConfig{Type: ThinkingTypeBetweenTools}, intPtr(100), nil, nil, nil)
+	if thinking == nil || thinking.Type != "between_tools" || len(warnings) != 0 {
+		t.Fatalf("thinking = %#v warnings = %#v", thinking, warnings)
+	}
+
+	for _, effort := range []string{"xhigh", "max"} {
+		t.Run("clamp_"+effort, func(t *testing.T) {
+			model := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-5-5", ModelOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeBetweenTools}, Effort: effort}).(*anthropicLanguageModel)
+			req, warnings := model.buildRequest(GenerateOptions{}, false)
+			if req.Thinking == nil || req.Thinking.Type != "between_tools" {
+				t.Fatalf("thinking = %#v", req.Thinking)
+			}
+			if req.OutputConfig == nil || req.OutputConfig.Effort != "high" {
+				t.Fatalf("output_config = %#v", req.OutputConfig)
+			}
+			if len(warnings) != 1 || warnings[0].Type != "compatibility" || !strings.Contains(warnings[0].Message, effort) {
+				t.Fatalf("warnings = %#v", warnings)
+			}
+		})
+	}
+
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-5-5", ModelOptions{Thinking: &ThinkingConfig{Type: ThinkingTypeBetweenTools}, Effort: "high"}).(*anthropicLanguageModel)
+	req, warnings := model.buildRequest(GenerateOptions{}, false)
+	if req.OutputConfig == nil || req.OutputConfig.Effort != "high" || len(warnings) != 0 {
+		t.Fatalf("request = %#v warnings = %#v", req, warnings)
+	}
+}
+
+func TestToolChoiceNonePassthroughAndForcedUseFallback(t *testing.T) {
+	rejecting := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-5-5").(*anthropicLanguageModel)
+	req, warnings := rejecting.buildRequest(GenerateOptions{
+		Tools:      []Tool{{Name: "weather"}},
+		ToolChoice: &ToolChoice{Type: "none"},
+	}, false)
+	if req.ToolChoice == nil || req.ToolChoice.Type != "none" {
+		t.Fatalf("tool_choice = %#v", req.ToolChoice)
+	}
+	if len(req.Tools) != 1 || len(warnings) != 0 {
+		t.Fatalf("tools = %#v warnings = %#v", req.Tools, warnings)
+	}
+
+	req, warnings = rejecting.buildRequest(GenerateOptions{ToolChoice: &ToolChoice{Type: "any"}}, false)
+	if req.ToolChoice == nil || req.ToolChoice.Type != "auto" {
+		t.Fatalf("tool_choice = %#v", req.ToolChoice)
+	}
+	if len(warnings) != 1 || warnings[0].Type != "compatibility" {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+
+	req, warnings = rejecting.buildRequest(GenerateOptions{
+		Tools:      []Tool{{Name: "keep"}, {Name: "drop"}},
+		ToolChoice: &ToolChoice{Type: "tool", Name: "keep"},
+	}, false)
+	if req.ToolChoice == nil || req.ToolChoice.Type != "auto" {
+		t.Fatalf("tool_choice = %#v", req.ToolChoice)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != "keep" {
+		t.Fatalf("tools = %#v", req.Tools)
+	}
+	if len(warnings) != 1 || warnings[0].Type != "compatibility" {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+
+	permissive := CreateAnthropic(ProviderSettings{}).Model("claude-3-haiku-20240307").(*anthropicLanguageModel)
+	req, warnings = permissive.buildRequest(GenerateOptions{
+		Tools:      []Tool{{Name: "weather"}},
+		ToolChoice: &ToolChoice{Type: "required", Name: "weather"},
+	}, false)
+	if req.ToolChoice == nil || req.ToolChoice.Type != "tool" || req.ToolChoice.Name != "weather" {
+		t.Fatalf("tool_choice = %#v", req.ToolChoice)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestNewProviderToolWireDeclarations(t *testing.T) {
+	one, tokens := 1, 2048
+	useCache := true
+	citations := &CitationsConfig{Enabled: true}
+	tests := []struct {
+		tool Tool
+		want string
+	}{
+		{Tool{ID: "anthropic.computer_toolset_20260801", Configs: map[string]MCPToolConfig{"member": {Enabled: boolPtr(true)}}}, `{"type":"computer_toolset_20260801","configs":{"member":{"enabled":true}}}`},
+		{Tool{ID: "anthropic.web_fetch_20260318", MaxUses: &one, AllowedDomains: []string{"allowed.example"}, BlockedDomains: []string{"blocked.example"}, Citations: citations, MaxContentTokens: &tokens, UseCache: &useCache, ResponseInclusion: "citations"}, `{"name":"web_fetch","type":"web_fetch_20260318","max_uses":1,"allowed_domains":["allowed.example"],"blocked_domains":["blocked.example"],"citations":{"enabled":true},"max_content_tokens":2048,"use_cache":true,"response_inclusion":"citations"}`},
+		{Tool{ID: "anthropic.web_search_20260318", MaxUses: &one, ResponseInclusion: "citations"}, `{"name":"web_search","type":"web_search_20260318","max_uses":1,"response_inclusion":"citations"}`},
+	}
+	for _, tt := range tests {
+		wire, replaySafe, err := toolsToWire([]Tool{tt.tool})
+		if err != nil {
+			t.Fatalf("%s: %v", tt.tool.ID, err)
+		}
+		if replaySafe {
+			t.Fatalf("%s marked replay safe", tt.tool.ID)
+		}
+		got, err := json.Marshal(wire[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != tt.want {
+			t.Fatalf("%s = %s, want %s", tt.tool.ID, got, tt.want)
+		}
+	}
+}
+
+func TestToolsetMemberInputWrapsAction(t *testing.T) {
+	result, err := parseGenerateResponse([]byte(`{"content":[{"type":"tool_use","id":"c1","name":"member","input":{"x":1},"toolset_name":"toolset"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := result.Content[0].(ToolCallContent)
+	if call.ToolsetName != "toolset" || string(call.Input) != `{"action":"member","x":1}` {
+		t.Fatalf("call = %#v input = %s", call, call.Input)
+	}
+
+	result, err = parseGenerateResponse([]byte(`{"content":[{"type":"tool_use","id":"c2","name":"member","toolset_name":"toolset"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	call = result.Content[0].(ToolCallContent)
+	if string(call.Input) != `{"action":"member"}` {
+		t.Fatalf("nil input = %s", call.Input)
+	}
+
+	_, messages := convertPrompt([]Message{AssistantMessage{Content: []AssistantContent{ToolCallContent{ToolCallID: "c1", ToolName: "member", Input: json.RawMessage(`{"x":1}`), ToolsetName: "toolset"}}}})
+	got, err := json.Marshal(messages[0].Content[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"id":"c1","input":{"x":1},"name":"member","toolset_name":"toolset","type":"tool_use"}` {
+		t.Fatalf("replay = %s", got)
+	}
+}
+
+func TestFallbackContentSurfaced(t *testing.T) {
+	result, err := parseGenerateResponse([]byte(`{"content":[{"type":"fallback","from":{"model":"claude-opus-4-6"},"to":{"model":"claude-sonnet-4-6"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, ok := result.Content[0].(FallbackContent)
+	if !ok || fallback.FromModel != "claude-opus-4-6" || fallback.ToModel != "claude-sonnet-4-6" {
+		t.Fatalf("content = %#v", result.Content)
+	}
+
+	_, messages := convertPrompt([]Message{AssistantMessage{Content: []AssistantContent{FallbackContent{FromModel: "claude-opus-4-6", ToModel: "claude-sonnet-4-6"}}}})
+	got, err := json.Marshal(messages[0].Content[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"from":{"model":"claude-opus-4-6"},"to":{"model":"claude-sonnet-4-6"},"type":"fallback"}` {
+		t.Fatalf("replay = %s", got)
+	}
+}
+
+func TestCompactionSignatureSurfaced(t *testing.T) {
+	result, err := parseGenerateResponse([]byte(`{"content":[{"type":"compaction","content":"compact","signature":"sig"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compaction, ok := result.Content[0].(CompactionContent)
+	if !ok || compaction.Text != "compact" || compaction.Signature != "sig" {
+		t.Fatalf("content = %#v", result.Content)
+	}
+
+	_, messages := convertPrompt([]Message{AssistantMessage{Content: []AssistantContent{CompactionContent{Text: "compact", Signature: "sig"}}}})
+	got, err := json.Marshal(messages[0].Content[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"signature":"sig","text":"compact","type":"compaction"}` {
+		t.Fatalf("replay = %s", got)
+	}
+}
+
+func TestResponseMetadataSafeguardAndInputTransformations(t *testing.T) {
+	body := []byte(`{"content":[],"input_transformations":[{"type":"search_replacement","path":"messages.0","reason":"redacted"}],"safeguard_results":[{"type":"jailbreak","status":{"blocked":true}}]}`)
+	result, err := parseGenerateResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transformations, ok := result.MessageMetadata["input_transformations"].([]InputTransformation)
+	if !ok || len(transformations) != 1 || transformations[0] != (InputTransformation{Type: "search_replacement", Path: "messages.0", Reason: "redacted"}) {
+		t.Fatalf("input_transformations = %#v", result.MessageMetadata["input_transformations"])
+	}
+	safeguards, ok := result.MessageMetadata["safeguard_results"].([]SafeguardResult)
+	if !ok || len(safeguards) != 1 || safeguards[0].Type != "jailbreak" || string(safeguards[0].Status) != `{"blocked":true}` {
+		t.Fatalf("safeguard_results = %#v", result.MessageMetadata["safeguard_results"])
+	}
+}
+
+func TestSystemClearAtAndEffortInlineMessage(t *testing.T) {
+	system, messages := convertPrompt([]Message{SystemMessage{Effort: "high"}})
+	if len(system) != 0 {
+		t.Fatalf("system = %#v", system)
+	}
+	if len(messages) != 1 || messages[0].Role != "system" || len(messages[0].Content) != 0 || messages[0].OutputConfig == nil || messages[0].OutputConfig.Effort != "high" {
+		t.Fatalf("messages = %#v", messages)
+	}
+
+	system, messages = convertPrompt([]Message{
+		SystemMessage{Content: "system"},
+		SystemMessage{Content: "inline", ClearAt: "before_thinking", Effort: "high"},
+	})
+	if len(system) != 1 || system[0].Text != "system" {
+		t.Fatalf("system = %#v", system)
+	}
+	if len(messages) != 1 || messages[0].Role != "system" || messages[0].ClearAt != "before_thinking" || messages[0].OutputConfig == nil || messages[0].OutputConfig.Effort != "high" || len(messages[0].Content) != 1 || messages[0].Content[0].Text != "inline" {
+		t.Fatalf("messages = %#v", messages)
+	}
+	got, err := json.Marshal(messages[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"role":"system","content":[{"text":"inline","type":"text"}],"clear_at":"before_thinking","output_config":{"effort":"high"}}` {
+		t.Fatalf("message = %s", got)
+	}
+}
+
+func TestFallbackReplayRoundTrip(t *testing.T) {
+	blocks := convertAssistantContent([]AssistantContent{FallbackContent{FromModel: "claude-opus-4-1", ToModel: "claude-sonnet-4-6"}})
+	if len(blocks) != 1 || blocks[0].Type != "fallback" || blocks[0].From == nil || blocks[0].From.Model != "claude-opus-4-1" || blocks[0].To == nil || blocks[0].To.Model != "claude-sonnet-4-6" {
+		t.Fatalf("blocks = %#v", blocks)
+	}
+	parsed := parseContentBlocks(blocks)
+	fallback, ok := parsed[0].(FallbackContent)
+	if !ok || fallback.FromModel != "claude-opus-4-1" || fallback.ToModel != "claude-sonnet-4-6" {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+
+	empty := convertAssistantContent([]AssistantContent{FallbackContent{}})[0]
+	if empty.From != nil || empty.To != nil {
+		t.Fatalf("empty fallback endpoints = %#v/%#v", empty.From, empty.To)
+	}
+	got, err := json.Marshal(empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), `"from"`) || strings.Contains(string(got), `"to"`) {
+		t.Fatalf("empty fallback serializes endpoints: %s", got)
+	}
+}
+
+func TestCompactionSignatureReplay(t *testing.T) {
+	blocks := convertAssistantContent([]AssistantContent{CompactionContent{Text: "summary", Signature: "sig"}})
+	if len(blocks) != 1 || blocks[0].Type != "compaction" || blocks[0].Text != "summary" || blocks[0].Signature != "sig" {
+		t.Fatalf("blocks = %#v", blocks)
+	}
+	parsed := parseContentBlocks(blocks)
+	compaction, ok := parsed[0].(CompactionContent)
+	if !ok || compaction.Text != "summary" || compaction.Signature != "sig" {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+}
+
+func TestToolsetMemberStreamInput(t *testing.T) {
+	prefix := event("message_start", `{"message":{"id":"m","model":"c"}}`)
+	sse := prefix + event("content_block_start", `{"index":0,"content_block":{"type":"tool_use","id":"call","name":"member","toolset_name":"set","input":{"x":1}}}`) +
+		event("content_block_stop", `{"index":0}`) + event("message_stop", `{}`)
+	var call *StreamToolCall
+	for _, part := range parseStream(t, sse) {
+		if c, ok := part.(StreamToolCall); ok {
+			call = &c
+		}
+	}
+	if call == nil {
+		t.Fatal("no StreamToolCall")
+	}
+	if call.ToolsetName != "set" {
+		t.Fatalf("toolset = %q", call.ToolsetName)
+	}
+	var input map[string]any
+	if err := json.Unmarshal(call.Input, &input); err != nil || input["action"] != "member" || input["x"] != float64(1) {
+		t.Fatalf("input = %s", call.Input)
+	}
+
+	parsed := parseContentBlocks([]apiContentBlock{{Type: "tool_use", ID: "call", Name: "member", ToolsetName: "set", Input: map[string]any{"action": "custom", "x": 1}}})
+	member, ok := parsed[0].(ToolCallContent)
+	if !ok {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+	input = nil
+	if err := json.Unmarshal(member.Input, &input); err != nil || input["action"] != "custom" {
+		t.Fatalf("caller action overwritten: %s", member.Input)
+	}
+
+	parsed = parseContentBlocks([]apiContentBlock{{Type: "tool_use", ID: "call", Name: "member", ToolsetName: "set", Input: "just-a-string"}})
+	member, ok = parsed[0].(ToolCallContent)
+	if !ok || string(member.Input) != `"just-a-string"` {
+		t.Fatalf("non-object input not preserved: %#v", parsed)
+	}
+}
+
+func TestCitationSuppressionParity(t *testing.T) {
+	textWithCitation := apiContentBlock{Type: "text", Text: "answer", Citations: []Citation{{Type: "web_search_result_location", URL: "https://example.com", Title: "Example"}}}
+	withResults := parseContentBlocks([]apiContentBlock{textWithCitation, {Type: "web_search_tool_result", ToolUseID: "t", Content: []apiContentBlock{{Type: "web_search_result", URL: "https://example.com"}}}})
+	for _, item := range withResults {
+		if source, ok := item.(SourceContent); ok {
+			t.Fatalf("generate emitted source despite results: %#v", source)
+		}
+	}
+	withoutResults := parseContentBlocks([]apiContentBlock{textWithCitation})
+	found := false
+	for _, item := range withoutResults {
+		if source, ok := item.(SourceContent); ok && source.URL == "https://example.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("generate suppressed source without results: %#v", withoutResults)
+	}
+
+	prefix := event("message_start", `{"message":{"id":"m","model":"c"}}`)
+	sseWithResults := prefix +
+		event("content_block_start", `{"index":0,"content_block":{"type":"web_search_tool_result","tool_use_id":"t","content":[{"type":"web_search_result","url":"https://example.com"}]}}`) +
+		event("content_block_stop", `{"index":0}`) +
+		event("content_block_start", `{"index":1,"content_block":{"type":"text"}}`) +
+		event("content_block_delta", `{"index":1,"delta":{"type":"citations_delta","citation":{"type":"web_search_result_location","url":"https://example.com"}}}`) +
+		event("content_block_stop", `{"index":1}`) + event("message_stop", `{}`)
+	for _, part := range parseStream(t, sseWithResults) {
+		if source, ok := part.(StreamSource); ok && source.SourceType == "url" {
+			t.Fatalf("stream emitted citation source despite results: %#v", source)
+		}
+	}
+
+	sseBareSource := prefix +
+		event("content_block_start", `{"index":0,"content_block":{"type":"web_search_result","url":"https://example.com"}}`) +
+		event("content_block_stop", `{"index":0}`) +
+		event("content_block_start", `{"index":1,"content_block":{"type":"text"}}`) +
+		event("content_block_delta", `{"index":1,"delta":{"type":"citations_delta","citation":{"type":"web_search_result_location","url":"https://example.com"}}}`) +
+		event("content_block_stop", `{"index":1}`) + event("message_stop", `{}`)
+	found = false
+	for _, part := range parseStream(t, sseBareSource) {
+		if source, ok := part.(StreamSource); ok && source.SourceType == "url" && source.URL == "https://example.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("stream suppressed citation source for bare web_search_result block")
+	}
+}
+
+func TestFirstMessageSystemEffortClearAt(t *testing.T) {
+	system, messages := convertPrompt([]Message{SystemMessage{Content: "sys", ClearAt: "before_thinking", Effort: "high"}})
+	if len(system) != 1 || system[0].Text != "sys" {
+		t.Fatalf("system = %#v", system)
+	}
+	if len(messages) != 1 || messages[0].Role != "system" || messages[0].ClearAt != "before_thinking" || messages[0].OutputConfig == nil || messages[0].OutputConfig.Effort != "high" || len(messages[0].Content) != 0 {
+		t.Fatalf("messages = %#v", messages)
+	}
+}
+
+func TestUnmatchedForcedFallbackToolName(t *testing.T) {
+	model := CreateAnthropic(ProviderSettings{}).Model("claude-sonnet-5-5").(*anthropicLanguageModel)
+	req, warnings := model.buildRequest(GenerateOptions{
+		Messages:   []Message{UserMessage{Content: []UserContent{TextContent{Text: "hi"}}}},
+		Tools:      []Tool{{Name: "weather"}},
+		ToolChoice: &ToolChoice{Type: "tool", Name: "missing"},
+	}, false)
+	if req.ToolChoice == nil || req.ToolChoice.Type != "auto" {
+		t.Fatalf("tool choice = %#v", req.ToolChoice)
+	}
+	if len(warnings) == 0 {
+		t.Fatal("no fallback warning")
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != "weather" {
+		t.Fatalf("tools = %#v", req.Tools)
+	}
+}
+
+func TestContentBlockStopRequiresObject(t *testing.T) {
+	prefix := event("message_start", `{"message":{"id":"m","model":"c"}}`) +
+		event("content_block_start", `{"index":0,"content_block":{"type":"text"}}`)
+	for _, payload := range []string{`[0]`, `null`, `0`, `"index"`} {
+		parts := parseStream(t, prefix+event("content_block_stop", payload))
+		if _, ok := parts[len(parts)-1].(StreamError); !ok {
+			t.Fatalf("payload %s parts = %#v", payload, parts)
+		}
+	}
+}

@@ -132,17 +132,21 @@ func TestProviderTools(t *testing.T) {
 
 func TestModelCapabilitiesForID(t *testing.T) {
 	tests := map[string]ModelCapabilities{
-		"claude-opus-4-8":           {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true},
-		"claude-opus-4-7":           {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true},
-		"claude-sonnet-4-6":         {MaxOutputTokens: 128000, StructuredOutput: true},
-		"claude-opus-4-6":           {MaxOutputTokens: 128000, StructuredOutput: true},
+		"claude-sonnet-5-5":         {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true, SupportsAdaptiveThinking: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true, RejectsThinkingDisabled: true, RejectsBudgetThinking: true, RejectsForcedToolUse: true, SupportsBetweenToolsThinking: true},
+		"claude-opus-5-5":           {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true, SupportsAdaptiveThinking: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true, RejectsThinkingDisabled: true, RejectsBudgetThinking: true, RejectsForcedToolUse: true},
+		"claude-haiku-5-5":          {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true, SupportsAdaptiveThinking: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true, RejectsBudgetThinking: true},
+		"claude-fable-5-1":          {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true, SupportsAdaptiveThinking: true, SupportsXhighEffort: true, RejectsThinkingDisabled: true, RejectsBudgetThinking: true, RejectsForcedToolUse: true},
+		"claude-opus-4-8":           {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true, SupportsAdaptiveThinking: true, SupportsXhighEffort: true},
+		"claude-opus-4-7":           {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true, SupportsAdaptiveThinking: true, SupportsXhighEffort: true},
+		"claude-sonnet-4-6":         {MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true},
+		"claude-opus-4-6":           {MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true},
 		"claude-sonnet-4-5":         {MaxOutputTokens: 64000, StructuredOutput: true},
 		"claude-opus-4-5":           {MaxOutputTokens: 64000, StructuredOutput: true},
 		"claude-haiku-4-5":          {MaxOutputTokens: 64000, StructuredOutput: true},
 		"claude-haiku-4-5-20251001": {MaxOutputTokens: 64000, StructuredOutput: true},
 		"claude-opus-4-1":           {MaxOutputTokens: 32000, StructuredOutput: true},
-		"claude-sonnet-4":           {MaxOutputTokens: 64000},
-		"claude-opus-4":             {MaxOutputTokens: 32000},
+		"claude-sonnet-4":           {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true, SupportsAdaptiveThinking: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true},
+		"claude-opus-4":             {MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true, SupportsAdaptiveThinking: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true},
 		"claude-3-haiku-20240307":   {MaxOutputTokens: 4096},
 	}
 	for modelID, want := range tests {
@@ -212,17 +216,22 @@ func TestBaseURLNormalization(t *testing.T) {
 }
 
 func TestAdversarialModelIDs(t *testing.T) {
+	unknownNewer := ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true, SupportsAdaptiveThinking: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true}
 	tests := []struct {
 		id            string
 		known, claude bool
 		caps          ModelCapabilities
 	}{
 		{"my-claude-sonnet-4-5", false, false, ModelCapabilities{MaxOutputTokens: 4096}},
-		{"claude-sonnet-4-unknown", false, true, ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}},
+		{"claude-sonnet-4-unknown", true, true, ModelCapabilities{MaxOutputTokens: 64000}},
 		{"claude-sonnet-4-5-20250929", true, true, ModelCapabilities{MaxOutputTokens: 64000, StructuredOutput: true}},
 		{"claude-3-haiku-20240307", true, true, ModelCapabilities{MaxOutputTokens: 4096}},
-		{"claude-sonnet-6", false, true, ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}},
+		{"claude-sonnet-6", false, true, unknownNewer},
 		{"legacy/claude-sonnet-4-5", false, false, ModelCapabilities{MaxOutputTokens: 4096}},
+		{"claude-sonnet-4", false, true, unknownNewer},
+		{"claude-opus-4", false, true, unknownNewer},
+		{"claude-sonnet-4-1", true, true, ModelCapabilities{MaxOutputTokens: 64000}},
+		{"claude-opus-4@20250101", true, true, ModelCapabilities{MaxOutputTokens: 32000}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.id, func(t *testing.T) {
