@@ -17,6 +17,11 @@ type ModelOptions struct {
 	AnthropicBeta          []string
 	ContextManagement      *ContextManagement
 	RequestTools           []Tool
+	// effectiveThinking is the post-fallback wire thinking object computed by
+	// buildRequestWithOptions. When set, betaHeadersForOptions derives the
+	// thinking betas from it instead of the raw Thinking config so headers
+	// match what is actually sent.
+	effectiveThinking *apiThinking
 }
 
 type ToolOptions struct {

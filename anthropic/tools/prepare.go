@@ -32,6 +32,8 @@ var ToolNameMapping = anthropic.ToolNameMapping{
 	"anthropic.web_search_20260209":        "web_search",
 	"anthropic.web_fetch_20250910":         "web_fetch",
 	"anthropic.web_fetch_20260209":         "web_fetch",
+	"anthropic.web_fetch_20260318":         "web_fetch",
+	"anthropic.web_search_20260318":        "web_search",
 	"anthropic.tool_search_regex_20251119": "tool_search_tool_regex",
 	"anthropic.tool_search_bm25_20251119":  "tool_search_tool_bm25",
 	"anthropic.advisor_20260301":           "advisor",
@@ -86,6 +88,15 @@ func WebFetch_20260209(maxUses *int, allowedDomains, blockedDomains []string, ci
 	return tool
 }
 
+func WebFetch_20260318(maxUses *int, allowedDomains, blockedDomains []string, citations *anthropic.CitationsConfig, maxContentTokens *int, useCache *bool, responseInclusion string) anthropic.Tool {
+	tool := WebFetch_20250910(maxUses, allowedDomains, blockedDomains, citations, maxContentTokens)
+	tool.ID = "anthropic.web_fetch_20260318"
+	tool.Name = "web_fetch_20260318"
+	tool.UseCache = useCache
+	tool.ResponseInclusion = responseInclusion
+	return tool
+}
+
 func WebSearch_20250305(maxUses *int, allowedDomains, blockedDomains []string, userLocation *anthropic.UserLocation) anthropic.Tool {
 	tool := providerTool("anthropic.web_search_20250305", "web_search_20250305")
 	tool.MaxUses = maxUses
@@ -99,6 +110,21 @@ func WebSearch_20260209(maxUses *int, allowedDomains, blockedDomains []string, u
 	tool := WebSearch_20250305(maxUses, allowedDomains, blockedDomains, userLocation)
 	tool.ID = "anthropic.web_search_20260209"
 	tool.Name = "web_search_20260209"
+	return tool
+}
+
+func WebSearch_20260318(maxUses *int, allowedDomains, blockedDomains []string, userLocation *anthropic.UserLocation, responseInclusion string) anthropic.Tool {
+	tool := WebSearch_20250305(maxUses, allowedDomains, blockedDomains, userLocation)
+	tool.ID = "anthropic.web_search_20260318"
+	tool.Name = "web_search_20260318"
+	tool.ResponseInclusion = responseInclusion
+	return tool
+}
+
+func ComputerToolset_20260801(configs map[string]anthropic.MCPToolConfig) anthropic.Tool {
+	tool := providerTool("anthropic.computer_toolset_20260801", "")
+	tool.Type = "computer_toolset_20260801"
+	tool.Configs = configs
 	return tool
 }
 

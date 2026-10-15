@@ -3,8 +3,18 @@ package anthropic
 import "encoding/json"
 
 type apiMessage struct {
-	Role    string            `json:"role"`
-	Content []apiContentBlock `json:"content"`
+	Role         string                  `json:"role"`
+	Content      []apiContentBlock       `json:"content"`
+	ClearAt      string                  `json:"clear_at,omitempty"`
+	OutputConfig *apiMessageOutputConfig `json:"output_config,omitempty"`
+}
+
+type apiMessageOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
+}
+
+type apiFallbackEndpoint struct {
+	Model string `json:"model,omitempty"`
 }
 
 type apiContentBlock struct {
@@ -39,6 +49,9 @@ type apiContentBlock struct {
 	ProviderExecuted bool                       `json:"provider_executed,omitempty"`
 	Dynamic          bool                       `json:"dynamic,omitempty"`
 	Caller           *ToolCallCallerInfo        `json:"caller,omitempty"`
+	ToolsetName      string                     `json:"toolset_name,omitempty"`
+	From             *apiFallbackEndpoint       `json:"from,omitempty"`
+	To               *apiFallbackEndpoint       `json:"to,omitempty"`
 	Raw              map[string]json.RawMessage `json:"-"`
 	ProviderMetadata ProviderMetadata           `json:"-"`
 }
@@ -82,14 +95,15 @@ var replayReservedKeysByType = map[string]map[string]struct{}{
 	"text":                                   {"text": {}, "citations": {}, "cache_control": {}},
 	"thinking":                               {"thinking": {}, "signature": {}},
 	"redacted_thinking":                      {"data": {}},
-	"compaction":                             {"text": {}},
+	"compaction":                             {"text": {}, "signature": {}},
+	"fallback":                               {"from": {}, "to": {}},
 	"image":                                  {"source": {}, "cache_control": {}},
 	"document":                               {"source": {}, "citations": {}, "cache_control": {}},
 	"content_reference":                      {"id": {}},
-	"tool_use":                               {"id": {}, "name": {}, "input": {}, "dynamic": {}, "caller": {}},
+	"tool_use":                               {"id": {}, "name": {}, "input": {}, "toolset_name": {}, "dynamic": {}, "caller": {}},
 	"server_tool_use":                        {"id": {}, "name": {}, "input": {}, "dynamic": {}, "caller": {}},
 	"mcp_tool_use":                           {"id": {}, "name": {}, "server_name": {}, "input": {}, "dynamic": {}},
-	"tool_result":                            {"tool_use_id": {}, "content": {}, "is_error": {}},
+	"tool_result":                            {"tool_use_id": {}, "content": {}, "is_error": {}, "toolset_name": {}},
 	"mcp_tool_result":                        {"tool_use_id": {}, "content": {}, "is_error": {}, "dynamic": {}, "caller": {}},
 	"web_fetch_tool_result":                  {"tool_use_id": {}, "content": {}, "is_error": {}, "dynamic": {}, "caller": {}},
 	"web_search_tool_result":                 {"tool_use_id": {}, "content": {}, "is_error": {}, "dynamic": {}, "caller": {}},
@@ -132,10 +146,39 @@ type apiBlockSource struct {
 func convertPrompt(messages []Message) ([]apiContentBlock, []apiMessage) {
 	var system []apiContentBlock
 	var converted []apiMessage
+	systemSeen := false
 	for _, message := range messages {
 		switch msg := message.(type) {
 		case SystemMessage:
-			system = append(system, apiContentBlock{Type: "text", Text: msg.Content, CacheControl: msg.CacheControl})
+			if !systemSeen {
+				systemSeen = true
+				if msg.Content != "" || (msg.ClearAt == "" && msg.Effort == "") {
+					system = append(system, apiContentBlock{Type: "text", Text: msg.Content, CacheControl: msg.CacheControl})
+				}
+				if msg.ClearAt != "" || msg.Effort != "" {
+					inline := apiMessage{Role: "system", Content: []apiContentBlock{}}
+					if msg.ClearAt != "" {
+						inline.ClearAt = msg.ClearAt
+					}
+					if msg.Effort != "" {
+						inline.OutputConfig = &apiMessageOutputConfig{Effort: msg.Effort}
+					}
+					converted = append(converted, inline)
+				}
+			} else {
+				content := []apiContentBlock{}
+				if msg.Content != "" {
+					content = append(content, apiContentBlock{Type: "text", Text: msg.Content, CacheControl: msg.CacheControl})
+				}
+				inline := apiMessage{Role: "system", Content: content}
+				if msg.ClearAt != "" {
+					inline.ClearAt = msg.ClearAt
+				}
+				if msg.Effort != "" {
+					inline.OutputConfig = &apiMessageOutputConfig{Effort: msg.Effort}
+				}
+				converted = append(converted, inline)
+			}
 		case UserMessage:
 			converted = append(converted, apiMessage{Role: "user", Content: convertUserContent(msg.Content)})
 		case AssistantMessage:
@@ -181,13 +224,26 @@ func convertAssistantContent(contents []AssistantContent) []apiContentBlock {
 		case RedactedThinkingContent:
 			blocks = append(blocks, apiContentBlock{Type: "redacted_thinking", Data: c.Data})
 		case CompactionContent:
-			blocks = append(blocks, apiContentBlock{Type: "compaction", Text: c.Text})
+			blocks = append(blocks, apiContentBlock{Type: "compaction", Text: c.Text, Signature: c.Signature})
+		case FallbackContent:
+			block := apiContentBlock{Type: "fallback"}
+			if c.FromModel != "" {
+				block.From = &apiFallbackEndpoint{Model: c.FromModel}
+			}
+			if c.ToModel != "" {
+				block.To = &apiFallbackEndpoint{Model: c.ToModel}
+			}
+			blocks = append(blocks, block)
 		case ToolCallContent:
 			blockType := "tool_use"
 			if c.ProviderExecuted {
 				blockType = "server_tool_use"
 			}
-			blocks = append(blocks, apiContentBlock{Type: blockType, ID: c.ToolCallID, Name: c.ToolName, Input: normalizedToolInput(c.Input), Dynamic: c.Dynamic, Caller: c.Caller, Raw: c.Raw})
+			block := apiContentBlock{Type: blockType, ID: c.ToolCallID, Name: c.ToolName, Input: normalizedToolInput(c.Input), Dynamic: c.Dynamic, Caller: c.Caller, Raw: c.Raw}
+			if blockType == "tool_use" {
+				block.ToolsetName = c.ToolsetName
+			}
+			blocks = append(blocks, block)
 		case ServerToolUseContent:
 			blocks = append(blocks, apiContentBlock{Type: "server_tool_use", ID: c.ID, Name: c.Name, Input: normalizedToolInput(c.Input), Dynamic: c.Dynamic, Caller: c.Caller, Raw: c.Raw})
 		case MCPToolUseContent:
@@ -237,7 +293,7 @@ func convertToolResultContent(c ToolResultContent) apiContentBlock {
 	if len(c.RawContent) != 0 {
 		content = mergeReplayValue(rawJSONToAny(c.RawContent), typed)
 	}
-	return apiContentBlock{Type: valueOrDefault(c.Type, "tool_result"), ToolUseID: c.ToolCallID, Content: content, IsError: c.IsError, Dynamic: c.Dynamic, Caller: c.Caller, Raw: c.Raw}
+	return apiContentBlock{Type: valueOrDefault(c.Type, "tool_result"), ToolUseID: c.ToolCallID, Content: content, IsError: c.IsError, ToolsetName: c.ToolsetName, Dynamic: c.Dynamic, Caller: c.Caller, Raw: c.Raw}
 }
 
 func mergeReplayValue(raw, typed any) any {

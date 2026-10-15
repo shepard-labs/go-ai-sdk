@@ -216,9 +216,14 @@ type apiMessagesRequest struct {
 }
 
 type apiThinking struct {
-	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens,omitempty"`
-	Display      string `json:"display,omitempty"`
+	Type         string                   `json:"type,omitempty"`
+	BudgetTokens int                      `json:"budget_tokens,omitempty"`
+	Display      string                   `json:"display,omitempty"`
+	BlockBinding *apiThinkingBlockBinding `json:"block_binding,omitempty"`
+}
+
+type apiThinkingBlockBinding struct {
+	PrefixMismatchBehavior string `json:"prefix_mismatch_behavior,omitempty"`
 }
 
 const minimumThinkingBudgetTokens = 1024
@@ -258,6 +263,8 @@ type apiTool struct {
 	MCPServerName       string                   `json:"mcp_server_name,omitempty"`
 	DefaultConfig       *MCPToolConfig           `json:"default_config,omitempty"`
 	Configs             map[string]MCPToolConfig `json:"configs,omitempty"`
+	UseCache            *bool                    `json:"use_cache,omitempty"`
+	ResponseInclusion   string                   `json:"response_inclusion,omitempty"`
 }
 
 // Mappings: @ai-sdk/anthropic@3.0.115 src/anthropic-prepare-tools.ts:135-376;
@@ -288,6 +295,8 @@ func toolsToWire(tools []Tool) ([]apiTool, bool, error) {
 				return nil, false, invalidProviderTool(i, tool.ID, "valid display fields and enable zoom are required")
 			}
 			provider = apiTool{Type: "computer_20251124", Name: "computer", DisplayWidthPx: tool.DisplayWidthPx, DisplayHeightPx: tool.DisplayHeightPx, DisplayNumber: tool.DisplayNumber, EnableZoom: tool.EnableZoom}
+		case "anthropic.computer_toolset_20260801":
+			provider = apiTool{Type: "computer_toolset_20260801", Configs: tool.Configs}
 		case "anthropic.text_editor_20250728":
 			if tool.MaxCharacters != nil && *tool.MaxCharacters <= 0 {
 				return nil, false, invalidProviderTool(i, tool.ID, "max characters must be positive")
@@ -300,6 +309,11 @@ func toolsToWire(tools []Tool) ([]apiTool, bool, error) {
 				return nil, false, err
 			}
 			provider = apiTool{Type: strings.TrimPrefix(tool.ID, "anthropic."), Name: "web_fetch", MaxUses: tool.MaxUses, AllowedDomains: tool.AllowedDomains, BlockedDomains: tool.BlockedDomains, Citations: tool.Citations, MaxContentTokens: tool.MaxContentTokens}
+		case "anthropic.web_fetch_20260318":
+			if err := validateUses(i, tool.ID, tool.MaxUses, tool.MaxContentTokens); err != nil {
+				return nil, false, err
+			}
+			provider = apiTool{Type: strings.TrimPrefix(tool.ID, "anthropic."), Name: "web_fetch", MaxUses: tool.MaxUses, AllowedDomains: tool.AllowedDomains, BlockedDomains: tool.BlockedDomains, Citations: tool.Citations, MaxContentTokens: tool.MaxContentTokens, UseCache: tool.UseCache, ResponseInclusion: tool.ResponseInclusion}
 		case "anthropic.web_search_20250305", "anthropic.web_search_20260209":
 			if err := validateUses(i, tool.ID, tool.MaxUses, nil); err != nil {
 				return nil, false, err
@@ -308,6 +322,14 @@ func toolsToWire(tools []Tool) ([]apiTool, bool, error) {
 				return nil, false, invalidProviderTool(i, tool.ID, "user location type must be approximate")
 			}
 			provider = apiTool{Type: strings.TrimPrefix(tool.ID, "anthropic."), Name: "web_search", MaxUses: tool.MaxUses, AllowedDomains: tool.AllowedDomains, BlockedDomains: tool.BlockedDomains, UserLocation: tool.UserLocation}
+		case "anthropic.web_search_20260318":
+			if err := validateUses(i, tool.ID, tool.MaxUses, nil); err != nil {
+				return nil, false, err
+			}
+			if tool.UserLocation != nil && tool.UserLocation.Type != "approximate" {
+				return nil, false, invalidProviderTool(i, tool.ID, "user location type must be approximate")
+			}
+			provider = apiTool{Type: strings.TrimPrefix(tool.ID, "anthropic."), Name: "web_search", MaxUses: tool.MaxUses, AllowedDomains: tool.AllowedDomains, BlockedDomains: tool.BlockedDomains, UserLocation: tool.UserLocation, ResponseInclusion: tool.ResponseInclusion}
 		case "anthropic.tool_search_regex_20251119":
 			provider.Type, provider.Name = "tool_search_tool_regex_20251119", "tool_search_tool_regex"
 		case "anthropic.tool_search_bm25_20251119":
@@ -386,6 +408,9 @@ func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, s
 	}
 	thinking, thinkingWarnings := buildThinking(modelOptions.Thinking, &maxTokens, &temperature, &opts.TopK, &opts.TopP)
 	warnings = append(warnings, thinkingWarnings...)
+	thinking, thinkingWarnings = applyThinkingCapabilityFallbacks(thinking, capabilities, &modelOptions, m.modelID)
+	warnings = append(warnings, thinkingWarnings...)
+	modelOptions.effectiveThinking = thinking
 	if knownModel && thinking != nil && thinking.Type == "enabled" {
 		outputTokens := maxTokens - thinking.BudgetTokens
 		if thinking.BudgetTokens >= capabilities.MaxOutputTokens {
@@ -423,7 +448,8 @@ func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, s
 		}
 		maxTokens = capabilities.MaxOutputTokens
 	}
-	outputConfig, structuredTools, structuredChoice, disableParallel := m.buildStructuredOutput(opts.StructuredOutput, opts.ResponseFormat, modelOptions)
+	outputConfig, structuredTools, structuredChoice, disableParallel, structuredWarnings := m.buildStructuredOutput(opts.StructuredOutput, opts.ResponseFormat, modelOptions)
+	warnings = append(warnings, structuredWarnings...)
 	if outputConfig == nil && (modelOptions.Effort != "" || modelOptions.TaskBudget != nil) {
 		outputConfig = &OutputConfig{}
 	}
@@ -452,6 +478,9 @@ func (m *anthropicLanguageModel) buildRequestWithOptions(opts GenerateOptions, s
 	if structuredChoice != nil {
 		toolChoice = normalizeToolChoice(structuredChoice)
 	}
+	toolChoice, preparedTools, wireTools, forcedUseWarnings := applyForcedToolUseFallback(toolChoice, capabilities, preparedTools, wireTools, m.modelID)
+	warnings = append(warnings, forcedUseWarnings...)
+	modelOptions.RequestTools = preparedTools
 	if disableParallel {
 		modelOptions.DisableParallelToolUse = true
 	}
@@ -502,14 +531,91 @@ func normalizeToolChoice(choice *ToolChoice) *ToolChoice {
 	return &normalized
 }
 
+// applyThinkingCapabilityFallbacks mirrors the rejects*/effort handling in
+// @ai-sdk/anthropic@4.0.79 prepareRequest: models that reject a thinking mode
+// get a warned fallback instead of an API error.
+func applyThinkingCapabilityFallbacks(thinking *apiThinking, capabilities ModelCapabilities, modelOptions *ModelOptions, modelID string) (*apiThinking, []Warning) {
+	var warnings []Warning
+	// Effort is clamped before thinking-type conversion so a disabled request
+	// with xhigh/max effort still clamps even when disabled itself falls back
+	// to between_tools or is omitted below.
+	if thinking != nil && thinking.Type == "disabled" && capabilities.RejectsThinkingDisabledAboveHighEffort && isHighEffort(modelOptions.Effort) {
+		warnings = append(warnings, Warning{Type: "compatibility", Message: fmt.Sprintf("effort %q is not supported with thinking disabled on model %q; using %q", modelOptions.Effort, modelID, "high")})
+		modelOptions.Effort = "high"
+	}
+	if thinking != nil && thinking.Type == "between_tools" && isHighEffort(modelOptions.Effort) {
+		warnings = append(warnings, Warning{Type: "compatibility", Message: fmt.Sprintf("effort %q is not supported with between_tools thinking on model %q; using %q", modelOptions.Effort, modelID, "high")})
+		modelOptions.Effort = "high"
+	}
+	if thinking != nil && thinking.Type == "disabled" && capabilities.RejectsThinkingDisabled {
+		if capabilities.SupportsBetweenToolsThinking {
+			warnings = append(warnings, Warning{Type: "compatibility", Message: fmt.Sprintf("thinking type %q is not supported by model %q; falling back to %q", "disabled", modelID, "between_tools")})
+			thinking = &apiThinking{Type: "between_tools", BlockBinding: thinking.BlockBinding}
+		} else {
+			warnings = append(warnings, Warning{Type: "compatibility", Message: fmt.Sprintf("thinking type %q is not supported by model %q; omitting thinking configuration", "disabled", modelID)})
+			thinking = nil
+		}
+	}
+	if thinking != nil && thinking.Type == "enabled" && capabilities.RejectsBudgetThinking {
+		warnings = append(warnings, Warning{Type: "compatibility", Message: fmt.Sprintf("thinking type %q (budget-based) is not supported by model %q; falling back to %q", "enabled", modelID, "adaptive")})
+		thinking = &apiThinking{Type: "adaptive", BlockBinding: thinking.BlockBinding}
+	}
+	return thinking, warnings
+}
+
+func isHighEffort(effort string) bool {
+	return effort == "xhigh" || effort == "max"
+}
+
+// applyForcedToolUseFallback mirrors @ai-sdk/anthropic@4.0.79 prepareRequest:
+// models that reject forced tool use fall back to auto. A named tool choice
+// keeps only that tool on the wire.
+func applyForcedToolUseFallback(toolChoice *ToolChoice, capabilities ModelCapabilities, prepared []Tool, wire []apiTool, modelID string) (*ToolChoice, []Tool, []apiTool, []Warning) {
+	if toolChoice == nil || (toolChoice.Type != "required" && toolChoice.Type != "tool" && toolChoice.Type != "any") || !capabilities.RejectsForcedToolUse {
+		return toolChoice, prepared, wire, nil
+	}
+	warning := Warning{Type: "compatibility", Message: fmt.Sprintf("forced tool use (tool_choice %q) is not supported by model %q; falling back to %q", toolChoice.Type, modelID, "auto")}
+	fallback := &ToolChoice{Type: "auto", DisableParallelToolUse: toolChoice.DisableParallelToolUse}
+	if toolChoice.Type == "tool" && toolChoice.Name != "" {
+		keptPrepared := make([]Tool, 0, len(prepared))
+		for _, tool := range prepared {
+			if tool.Name == toolChoice.Name {
+				keptPrepared = append(keptPrepared, tool)
+			}
+		}
+		keptWire := make([]apiTool, 0, len(wire))
+		for _, tool := range wire {
+			if tool.Name == toolChoice.Name {
+				keptWire = append(keptWire, tool)
+			}
+		}
+		if len(keptPrepared) == 0 {
+			// Named tool matched nothing: keep the original tool lists so the
+			// request still carries usable tools alongside the warning.
+			return fallback, prepared, wire, []Warning{warning}
+		}
+		return fallback, keptPrepared, keptWire, []Warning{warning}
+	}
+	return fallback, prepared, wire, []Warning{warning}
+}
+
 func buildThinking(config *ThinkingConfig, maxTokens *int, temperature **float64, topK **int, topP **float64) (*apiThinking, []Warning) {
 	if config == nil {
 		return nil, nil
 	}
+	var warnings []Warning
+	var blockBinding *apiThinkingBlockBinding
+	if config.BlockBinding != nil {
+		switch config.BlockBinding.PrefixMismatchBehavior {
+		case "", ThinkingBlockBindingError, ThinkingBlockBindingDropBlock:
+			blockBinding = &apiThinkingBlockBinding{PrefixMismatchBehavior: config.BlockBinding.PrefixMismatchBehavior}
+		default:
+			warnings = append(warnings, Warning{Type: "compatibility", Message: fmt.Sprintf("thinking block binding prefix_mismatch_behavior %q is not supported; omitting block binding", config.BlockBinding.PrefixMismatchBehavior)})
+		}
+	}
 	switch config.Type {
 	case ThinkingTypeEnabled:
 		budget := config.BudgetTokens
-		var warnings []Warning
 		if budget == 0 {
 			budget = minimumThinkingBudgetTokens
 			warnings = append(warnings, Warning{Type: "compatibility", Message: "thinking budget is required when thinking is enabled. using default budget of 1024 tokens."})
@@ -527,19 +633,26 @@ func buildThinking(config *ThinkingConfig, maxTokens *int, temperature **float64
 			*topP = nil
 			warnings = append(warnings, Warning{Type: "unsupported-setting", Message: "topP is not supported when thinking is enabled"})
 		}
-		return &apiThinking{Type: "enabled", BudgetTokens: budget}, warnings
+		return &apiThinking{Type: "enabled", BudgetTokens: budget, BlockBinding: blockBinding}, warnings
 	case ThinkingTypeAdaptive:
-		return &apiThinking{Type: "adaptive", Display: string(config.Display)}, nil
+		return &apiThinking{Type: "adaptive", Display: string(config.Display), BlockBinding: blockBinding}, nil
+	case ThinkingTypeBetweenTools:
+		return &apiThinking{Type: "between_tools", BlockBinding: blockBinding}, nil
 	case ThinkingTypeDisabled:
-		return &apiThinking{Type: "disabled"}, nil
+		return &apiThinking{Type: "disabled", BlockBinding: blockBinding}, nil
 	default:
+		// Binding-only recovery: a block binding without a thinking type
+		// still sends a thinking object carrying block_binding.
+		if blockBinding != nil {
+			return &apiThinking{BlockBinding: blockBinding}, nil
+		}
 		return nil, nil
 	}
 }
 
-func (m *anthropicLanguageModel) buildStructuredOutput(output *StructuredOutput, responseFormat *ResponseFormat, opts ModelOptions) (*OutputConfig, []Tool, *ToolChoice, bool) {
+func (m *anthropicLanguageModel) buildStructuredOutput(output *StructuredOutput, responseFormat *ResponseFormat, opts ModelOptions) (*OutputConfig, []Tool, *ToolChoice, bool, []Warning) {
 	if output == nil && responseFormat == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, false, nil
 	}
 	schema := any(nil)
 	if output != nil {
@@ -555,11 +668,19 @@ func (m *anthropicLanguageModel) buildStructuredOutput(output *StructuredOutput,
 			mode = StructuredOutputModeJSONTool
 		}
 	}
+	var warnings []Warning
+	if mode == StructuredOutputModeJSONTool && schema != nil {
+		capabilities := ModelCapabilitiesForID(m.modelID)
+		if capabilities.RejectsForcedToolUse && capabilities.StructuredOutput {
+			warnings = append(warnings, Warning{Type: "compatibility", Message: fmt.Sprintf("forced tool use (jsonTool structured output) is not supported by model %q; using output format instead", m.modelID)})
+			mode = StructuredOutputModeOutputFormat
+		}
+	}
 	sanitized := SanitizeSchema(schema)
 	if mode == StructuredOutputModeJSONTool {
-		return nil, []Tool{{Name: "json", Description: "Respond with JSON matching the requested schema.", InputSchema: sanitized}}, &ToolChoice{Type: "required", Name: "json", DisableParallelToolUse: true}, true
+		return nil, []Tool{{Name: "json", Description: "Respond with JSON matching the requested schema.", InputSchema: sanitized}}, &ToolChoice{Type: "required", Name: "json", DisableParallelToolUse: true}, true, warnings
 	}
-	return &OutputConfig{Format: &ResponseFormat{Type: "json_schema", Schema: sanitized}}, nil, nil, false
+	return &OutputConfig{Format: &ResponseFormat{Type: "json_schema", Schema: sanitized}}, nil, nil, false, warnings
 }
 
 func prepareMCPToolsets(servers []MCPServer) []Tool {
@@ -728,55 +849,79 @@ func ModelCapabilitiesForID(modelID string) ModelCapabilities {
 	return capabilities
 }
 
+// matchesFamily anchors a versioned model family to the model ID: an exact
+// match or a dated/aliased variant (family followed by "-" or "@"). Unlike
+// strings.Contains, a custom prefixed ID such as "my-claude-sonnet-4-5" does
+// not match family "claude-sonnet-4-5".
+func matchesFamily(modelID, family string) bool {
+	return modelID == family ||
+		strings.HasPrefix(modelID, family+"-") ||
+		strings.HasPrefix(modelID, family+"@")
+}
+
+// Mirrors getModelCapabilities() in @ai-sdk/anthropic@4.0.79. Check order is
+// load-bearing: family names overlap (e.g. "claude-opus-5-5" starts with
+// "claude-opus-5-", "claude-fable-5-1" starts with "claude-fable-5-"), so the
+// more specific families must match first.
 func modelCapabilities(modelID string) (ModelCapabilities, bool) {
 	switch {
-	case isModelAlias(modelID, "claude-opus-5"):
-		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}, true
-	case isModelAlias(modelID, "claude-opus-4-8"), isModelAlias(modelID, "claude-opus-4-7"), isModelAlias(modelID, "claude-fable-5"), isModelAlias(modelID, "claude-sonnet-5"):
-		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}, true
-	case isModelAlias(modelID, "claude-sonnet-4-6"), isModelAlias(modelID, "claude-opus-4-6"):
-		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true}, true
-	case isModelAlias(modelID, "claude-sonnet-4-5"), isModelAlias(modelID, "claude-opus-4-5"), isModelAlias(modelID, "claude-haiku-4-5"):
+	case matchesFamily(modelID, "claude-sonnet-5-5"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true, RejectsSampling: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true, RejectsThinkingDisabled: true, RejectsBudgetThinking: true, RejectsForcedToolUse: true, SupportsBetweenToolsThinking: true}, true
+	case matchesFamily(modelID, "claude-opus-5-5"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true, RejectsSampling: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true, RejectsThinkingDisabled: true, RejectsBudgetThinking: true, RejectsForcedToolUse: true}, true
+	case matchesFamily(modelID, "claude-haiku-5-5"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true, RejectsSampling: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true, RejectsBudgetThinking: true}, true
+	case matchesFamily(modelID, "claude-opus-5"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true, RejectsSampling: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true}, true
+	case matchesFamily(modelID, "claude-fable-5-1"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true, RejectsSampling: true, SupportsXhighEffort: true, RejectsThinkingDisabled: true, RejectsBudgetThinking: true, RejectsForcedToolUse: true}, true
+	case matchesFamily(modelID, "claude-fable-5"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true, RejectsSampling: true, SupportsXhighEffort: true, RejectsThinkingDisabled: true, RejectsBudgetThinking: true}, true
+	case matchesFamily(modelID, "claude-opus-4-8"), matchesFamily(modelID, "claude-opus-4-7"), matchesFamily(modelID, "claude-sonnet-5"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true, RejectsSampling: true, SupportsXhighEffort: true}, true
+	case matchesFamily(modelID, "claude-sonnet-4-6"), matchesFamily(modelID, "claude-opus-4-6"):
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true}, true
+	case matchesFamily(modelID, "claude-sonnet-4-5"), matchesFamily(modelID, "claude-opus-4-5"), matchesFamily(modelID, "claude-haiku-4-5"):
 		return ModelCapabilities{MaxOutputTokens: 64000, StructuredOutput: true}, true
-	case isModelAlias(modelID, "claude-opus-4-1"):
+	case matchesFamily(modelID, "claude-opus-4-1"):
 		return ModelCapabilities{MaxOutputTokens: 32000, StructuredOutput: true}, true
-	case isModelAlias(modelID, "claude-sonnet-4"), modelID == "claude-sonnet-4-0":
+	case sonnet4BaseModelPattern.MatchString(modelID):
 		return ModelCapabilities{MaxOutputTokens: 64000}, true
-	case isModelAlias(modelID, "claude-opus-4"), modelID == "claude-opus-4-0":
+	case opus4BaseModelPattern.MatchString(modelID):
 		return ModelCapabilities{MaxOutputTokens: 32000}, true
-	case isModelAlias(modelID, "claude-3-haiku"):
+	case matchesFamily(modelID, "claude-3-haiku"):
 		return ModelCapabilities{MaxOutputTokens: 4096}, true
-	case regexp.MustCompile(`^claude-(?:instant(?:-|$)|v?2(?:$|[-.:])|3(?:$|[-.]))`).MatchString(modelID):
+	case legacyClaudeModelPattern.MatchString(modelID):
 		return ModelCapabilities{MaxOutputTokens: 4096}, false
 	case isClaudeModel(modelID):
-		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, RejectsSampling: true}, false
+		return ModelCapabilities{MaxOutputTokens: 128000, StructuredOutput: true, SupportsAdaptiveThinking: true, RejectsSampling: true, SupportsXhighEffort: true, RejectsThinkingDisabledAboveHighEffort: true}, false
 	default:
 		return ModelCapabilities{MaxOutputTokens: 4096}, false
 	}
 }
 
-func isModelAlias(modelID, alias string) bool {
-	if modelID == alias {
-		return true
-	}
-	suffix := strings.TrimPrefix(modelID, alias+"-")
-	return suffix != modelID && regexp.MustCompile(`^[0-9]{8}$`).MatchString(suffix)
-}
+var (
+	sonnet4BaseModelPattern  = regexp.MustCompile(`^claude-sonnet-4(?:-|@)`)
+	opus4BaseModelPattern    = regexp.MustCompile(`^claude-opus-4(?:-|@)`)
+	legacyClaudeModelPattern = regexp.MustCompile(`^claude-(?:instant(?:-|$)|v?2(?:$|[-.:])|3(?:$|[-.]))`)
+)
 
 func isClaudeModel(modelID string) bool {
 	return strings.HasPrefix(modelID, "claude-")
 }
 
 type apiMessagesResponse struct {
-	ID                string                        `json:"id"`
-	Model             string                        `json:"model"`
-	Role              string                        `json:"role"`
-	Content           []apiContentBlock             `json:"content"`
-	StopReason        string                        `json:"stop_reason"`
-	StopSequence      string                        `json:"stop_sequence"`
-	Usage             apiUsage                      `json:"usage"`
-	Container         *ContainerInfo                `json:"container"`
-	ContextManagement *apiContextManagementResponse `json:"context_management"`
+	ID                   string                        `json:"id"`
+	Model                string                        `json:"model"`
+	Role                 string                        `json:"role"`
+	Content              []apiContentBlock             `json:"content"`
+	StopReason           string                        `json:"stop_reason"`
+	StopSequence         string                        `json:"stop_sequence"`
+	Usage                apiUsage                      `json:"usage"`
+	Container            *ContainerInfo                `json:"container"`
+	ContextManagement    *apiContextManagementResponse `json:"context_management"`
+	InputTransformations []InputTransformation         `json:"input_transformations,omitempty"`
+	SafeguardResults     []SafeguardResult             `json:"safeguard_results,omitempty"`
 }
 
 type apiContextManagementResponse struct {
@@ -846,6 +991,12 @@ func parseGenerateResponse(body []byte) (*GenerateResult, error) {
 	}
 	if response.ContextManagement != nil {
 		metadata["contextManagement"] = parseContextManagementResponse(response.ContextManagement)
+	}
+	if response.InputTransformations != nil {
+		metadata["input_transformations"] = response.InputTransformations
+	}
+	if response.SafeguardResults != nil {
+		metadata["safeguard_results"] = response.SafeguardResults
 	}
 	content := convertJSONToolCallToText(parseContentBlocks(response.Content))
 	return &GenerateResult{
@@ -924,29 +1075,149 @@ func parseContextManagementEditResponses(edits []apiContextManagementEditRespons
 
 func parseContentBlocks(blocks []apiContentBlock) []Content {
 	content := make([]Content, 0, len(blocks))
+	skipWebSources := hasWebSearchResults(blocks)
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
 			content = append(content, TextContent{Text: block.Text, Citations: normalizeCitations(block.Citations), Raw: block.Raw})
+			for _, citation := range block.Citations {
+				if citation.Type == "web_search_result_location" && skipWebSources {
+					continue
+				}
+				if source, ok := citationToSource(citation); ok {
+					content = append(content, source)
+				}
+			}
 		case "thinking":
 			content = append(content, ReasoningContent{Type: "reasoning", Text: block.Thinking, Signature: block.Signature})
 		case "redacted_thinking":
 			content = append(content, ReasoningContent{Type: "redacted_reasoning", Text: block.Data})
 		case "compaction":
-			content = append(content, CompactionContent{Text: block.Text})
+			text := compactionBlockText(block)
+			if text == "" {
+				continue
+			}
+			content = append(content, CompactionContent{Text: text, Signature: block.Signature})
+		case "fallback":
+			content = append(content, FallbackContent{FromModel: fallbackModel(block.From), ToModel: fallbackModel(block.To)})
 		case "source", "web_search_result", "web_fetch_result":
 			content = append(content, SourceContent{SourceType: block.Type, ID: block.ID, URL: block.URL, Title: block.Title, MediaType: block.MediaType, Filename: block.Filename})
 		case "tool_use":
+			if block.ToolsetName != "" {
+				content = append(content, ToolCallContent{Type: "tool-call", ToolCallID: block.ID, ToolName: block.Name, Input: toToolsetMemberInput(block.Name, block.Input), ToolsetName: block.ToolsetName, ProviderExecuted: block.ProviderExecuted, Dynamic: block.Dynamic, Caller: block.Caller, Raw: block.Raw})
+				continue
+			}
 			content = append(content, ToolCallContent{Type: "tool-call", ToolCallID: block.ID, ToolName: block.Name, Input: anyToRawJSON(block.Input), ProviderExecuted: block.ProviderExecuted, Dynamic: block.Dynamic, Caller: block.Caller, Raw: block.Raw})
 		case "server_tool_use":
 			content = append(content, ServerToolUseContent{ID: block.ID, Name: block.Name, Input: anyToRawJSON(block.Input), Dynamic: block.Dynamic, Caller: block.Caller, Raw: block.Raw})
 		case "mcp_tool_use":
 			content = append(content, MCPToolUseContent{ID: block.ID, Name: block.Name, ServerName: block.ServerName, Input: anyToRawJSON(block.Input), Dynamic: block.Dynamic, Raw: block.Raw})
 		case "mcp_tool_result", "web_fetch_tool_result", "web_search_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result", "advisor_tool_result", "tool_result":
-			content = append(content, ToolResultContent{Type: block.Type, ToolCallID: block.ToolUseID, Result: parseToolResultParts(block.Content), IsError: block.IsError, ProviderExecuted: block.Type != "tool_result" || block.ProviderExecuted, Dynamic: block.Dynamic, Caller: block.Caller, Raw: block.Raw, RawContent: block.Raw["content"]})
+			content = append(content, ToolResultContent{Type: block.Type, ToolCallID: block.ToolUseID, Result: parseToolResultParts(block.Content), IsError: block.IsError, ProviderExecuted: block.Type != "tool_result" || block.ProviderExecuted, Dynamic: block.Dynamic, ToolsetName: block.ToolsetName, Caller: block.Caller, Raw: block.Raw, RawContent: block.Raw["content"]})
 		}
 	}
 	return content
+}
+
+// isWebSearchResultsBlock reports whether a response block carries web search
+// results whose presence makes web_search_result_location citations redundant.
+// Only web_search_tool_result blocks with non-empty content suppress
+// citations; bare web_search_result source blocks do not. This is the upstream
+// generate pre-scan semantic, shared by generate and stream for parity.
+func isWebSearchResultsBlock(block apiContentBlock) bool {
+	return block.Type == "web_search_tool_result" && blockHasArrayContent(block)
+}
+
+// hasWebSearchResults mirrors the doGenerate pre-scan: web_search citations
+// are redundant when the response already carries web_search results.
+func hasWebSearchResults(blocks []apiContentBlock) bool {
+	for _, block := range blocks {
+		if isWebSearchResultsBlock(block) {
+			return true
+		}
+	}
+	return false
+}
+
+func blockHasArrayContent(block apiContentBlock) bool {
+	raw, err := json.Marshal(block.Content)
+	if err != nil {
+		return false
+	}
+	var items []json.RawMessage
+	return json.Unmarshal(raw, &items) == nil && len(items) > 0
+}
+
+// compactionBlockText accepts the response `content` string as well as the
+// replay `text` field; an empty compaction block carries nothing to surface.
+func compactionBlockText(block apiContentBlock) string {
+	if block.Text != "" {
+		return block.Text
+	}
+	if text, ok := block.Content.(string); ok {
+		return text
+	}
+	return ""
+}
+
+func fallbackModel(endpoint *apiFallbackEndpoint) string {
+	if endpoint == nil {
+		return ""
+	}
+	return endpoint.Model
+}
+
+// citationToSource maps a citation to a SourceContent part: URL-based for web
+// and fetch search locations, document-based for document locations. Unknown
+// citation shapes (including empty pass-through citations) yield no source.
+func citationToSource(citation Citation) (SourceContent, bool) {
+	switch citation.Type {
+	case "web_search_result_location":
+		if citation.URL == "" {
+			return SourceContent{}, false
+		}
+		return SourceContent{SourceType: "url", URL: citation.URL, Title: citation.Title}, true
+	case "search_result_location":
+		if citation.Source == "" {
+			return SourceContent{}, false
+		}
+		return SourceContent{SourceType: "url", URL: citation.Source, Title: citation.Title}, true
+	case "page_location", "char_location", "content_block_location":
+		if citation.FileID == "" && citation.DocumentTitle == "" {
+			return SourceContent{}, false
+		}
+		return SourceContent{SourceType: "document", ID: citation.FileID, Title: citation.DocumentTitle}, true
+	default:
+		return SourceContent{}, false
+	}
+}
+
+// toToolsetMemberInput exposes a toolset member call on the toolset tool by
+// injecting the member name as the `action` property of the member input.
+// Object input gains `action` only when absent (a caller-supplied action is
+// kept as-is); non-object input is forwarded unchanged.
+func toToolsetMemberInput(memberName string, input any) json.RawMessage {
+	actionOnly, _ := json.Marshal(map[string]any{"action": memberName})
+	if input == nil {
+		return actionOnly
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return actionOnly
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return raw
+	}
+	if _, exists := fields["action"]; exists {
+		return raw
+	}
+	fields["action"] = memberName
+	merged, err := json.Marshal(fields)
+	if err != nil {
+		return raw
+	}
+	return merged
 }
 
 func anyToRawJSON(value any) json.RawMessage {
@@ -1269,6 +1540,7 @@ type streamBlockState struct {
 	typ, id, name             string
 	providerExecuted, dynamic bool
 	providerMetadata          ProviderMetadata
+	toolsetName, memberName   string
 	initialInput              []byte
 	hasInputDelta             bool
 	input                     strings.Builder
@@ -1280,6 +1552,10 @@ type streamParserState struct {
 	initialUsage                       apiUsage
 	blocks                             map[int]*streamBlockState
 	finish                             StreamFinish
+	hasWebSearchResults                bool
+	fallbackWebCitations               []Citation
+	inputTransformations               []InputTransformation
+	safeguardResults                   []SafeguardResult
 }
 
 func (s *streamParserState) handle(eventType string, data, raw []byte, truncated bool, metadata streamErrorMetadata) ([]StreamPart, error) {
@@ -1299,8 +1575,10 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 	case "message_start":
 		var message struct {
 			Message struct {
-				ID, Model string
-				Usage     apiUsage `json:"usage"`
+				ID, Model            string
+				Usage                apiUsage              `json:"usage"`
+				Content              []apiContentBlock     `json:"content,omitempty"`
+				InputTransformations []InputTransformation `json:"input_transformations,omitempty"`
 			} `json:"message"`
 		}
 		if err := json.Unmarshal(data, &message); err != nil {
@@ -1316,7 +1594,17 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 			return nil, fmt.Errorf("conflicting duplicate message_start")
 		}
 		s.started, s.messageID, s.model, s.initialUsage = true, message.Message.ID, message.Message.Model, message.Message.Usage
-		return []StreamPart{StreamStart{}, StreamResponseMetadata{ID: s.messageID, ModelID: s.model}}, nil
+		if message.Message.InputTransformations != nil {
+			s.inputTransformations = message.Message.InputTransformations
+		}
+		parts := []StreamPart{StreamStart{}, StreamResponseMetadata{ID: s.messageID, ModelID: s.model}}
+		for _, block := range message.Message.Content {
+			if block.Type != "fallback" {
+				continue
+			}
+			parts = append(parts, StreamRaw{Event: FallbackContent{FromModel: fallbackModel(block.From), ToModel: fallbackModel(block.To)}})
+		}
+		return parts, nil
 	case "content_block_start":
 		var event struct {
 			Index        *int            `json:"index"`
@@ -1332,11 +1620,19 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 			return nil, fmt.Errorf("duplicate content block index %d", *event.Index)
 		}
 		id := fmt.Sprint(*event.Index)
-		block := &streamBlockState{typ: event.ContentBlock.Type, id: event.ContentBlock.ID, name: event.ContentBlock.Name, providerExecuted: event.ContentBlock.ProviderExecuted, dynamic: event.ContentBlock.Dynamic, providerMetadata: event.ContentBlock.ProviderMetadata}
+		block := &streamBlockState{typ: event.ContentBlock.Type, id: event.ContentBlock.ID, name: event.ContentBlock.Name, providerExecuted: event.ContentBlock.ProviderExecuted, dynamic: event.ContentBlock.Dynamic, providerMetadata: event.ContentBlock.ProviderMetadata, toolsetName: event.ContentBlock.ToolsetName, memberName: event.ContentBlock.Name}
 		s.blocks[*event.Index] = block
 		switch event.ContentBlock.Type {
 		case "thinking", "redacted_thinking":
 			return []StreamPart{StreamReasoningStart{ID: id}}, nil
+		case "fallback":
+			return []StreamPart{StreamRaw{Event: FallbackContent{FromModel: fallbackModel(event.ContentBlock.From), ToModel: fallbackModel(event.ContentBlock.To)}}}, nil
+		case "compaction":
+			parts := []StreamPart{StreamTextStart{ID: id}}
+			if text := compactionBlockText(event.ContentBlock); text != "" {
+				parts = append(parts, StreamTextDelta{ID: id, Text: text})
+			}
+			return parts, nil
 		case "input_json", "tool_use", "server_tool_use", "mcp_tool_use":
 			if event.ContentBlock.Input != nil {
 				block.initialInput = append([]byte(nil), anyToRawJSON(event.ContentBlock.Input)...)
@@ -1345,7 +1641,10 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 		case "source", "web_search_result", "web_fetch_result":
 			return []StreamPart{StreamSource{SourceContent: SourceContent{SourceType: event.ContentBlock.Type, ID: event.ContentBlock.ID, URL: event.ContentBlock.URL, Title: event.ContentBlock.Title, MediaType: event.ContentBlock.MediaType, Filename: event.ContentBlock.Filename}, ProviderMetadata: event.ContentBlock.ProviderMetadata}}, nil
 		case "tool_result", "mcp_tool_result", "web_fetch_tool_result", "web_search_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result", "advisor_tool_result":
-			return []StreamPart{StreamToolResult{ToolResultContent: ToolResultContent{Type: event.ContentBlock.Type, ToolCallID: event.ContentBlock.ToolUseID, Result: parseToolResultParts(event.ContentBlock.Content), IsError: event.ContentBlock.IsError, ProviderExecuted: event.ContentBlock.Type != "tool_result" || event.ContentBlock.ProviderExecuted, Dynamic: event.ContentBlock.Dynamic, ProviderMetadata: event.ContentBlock.ProviderMetadata}}}, nil
+			if isWebSearchResultsBlock(event.ContentBlock) {
+				s.hasWebSearchResults = true
+			}
+			return []StreamPart{StreamToolResult{ToolResultContent: ToolResultContent{Type: event.ContentBlock.Type, ToolCallID: event.ContentBlock.ToolUseID, Result: parseToolResultParts(event.ContentBlock.Content), IsError: event.ContentBlock.IsError, ProviderExecuted: event.ContentBlock.Type != "tool_result" || event.ContentBlock.ProviderExecuted, Dynamic: event.ContentBlock.Dynamic, ToolsetName: event.ContentBlock.ToolsetName, ProviderMetadata: event.ContentBlock.ProviderMetadata}}}, nil
 		case "text":
 			return []StreamPart{StreamTextStart{ID: id}}, nil
 		default:
@@ -1361,6 +1660,7 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 				Thinking    string     `json:"thinking"`
 				Signature   string     `json:"signature"`
 				PartialJSON string     `json:"partial_json"`
+				Content     *string    `json:"content"`
 				Citations   []Citation `json:"citations"`
 				Citation    *Citation  `json:"citation"`
 			} `json:"delta"`
@@ -1390,7 +1690,18 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 			if event.Delta.Citation != nil {
 				citations = append(citations, *event.Delta.Citation)
 			}
-			return []StreamPart{StreamTextDelta{ID: id, Citations: normalizeCitations(citations)}}, nil
+			citations = normalizeCitations(citations)
+			parts := []StreamPart{StreamTextDelta{ID: id, Citations: citations}}
+			for _, citation := range citations {
+				if citation.Type == "web_search_result_location" {
+					s.fallbackWebCitations = append(s.fallbackWebCitations, citation)
+					continue
+				}
+				if source, ok := citationToSource(citation); ok {
+					parts = append(parts, StreamSource{SourceContent: source})
+				}
+			}
+			return parts, nil
 		case "thinking_delta":
 			if block.typ != "thinking" && block.typ != "redacted_thinking" {
 				return nil, fmt.Errorf("thinking delta for %s block", block.typ)
@@ -1415,10 +1726,22 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 			block.hasInputDelta = true
 			block.input.WriteString(event.Delta.PartialJSON)
 			return []StreamPart{StreamToolInputDelta{ID: id, Delta: InputJSONDelta{PartialJSON: event.Delta.PartialJSON}}}, nil
+		case "compaction_delta":
+			if block.typ != "compaction" {
+				return nil, fmt.Errorf("compaction delta for %s block", block.typ)
+			}
+			if event.Delta.Content == nil {
+				return nil, nil
+			}
+			return []StreamPart{StreamTextDelta{ID: id, Text: *event.Delta.Content}}, nil
 		default:
 			return nil, fmt.Errorf("unsupported delta type %q", event.Delta.Type)
 		}
 	case "content_block_stop":
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(data, &payload); err != nil || payload == nil {
+			return nil, fmt.Errorf("content_block_stop payload is not an object")
+		}
 		var event struct {
 			Index *int `json:"index"`
 		}
@@ -1439,10 +1762,23 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 			return []StreamPart{StreamReasoningEnd{ID: id}}, nil
 		case "text":
 			return []StreamPart{StreamTextEnd{ID: id}}, nil
+		case "fallback":
+			return nil, nil
+		case "compaction":
+			return []StreamPart{StreamTextEnd{ID: id}}, nil
 		case "input_json", "tool_use", "server_tool_use", "mcp_tool_use":
 			raw := block.initialInput
 			if block.hasInputDelta {
 				raw = []byte(block.input.String())
+			}
+			if block.toolsetName != "" && block.typ == "tool_use" {
+				var decoded any
+				if len(raw) > 0 {
+					if err := json.Unmarshal(raw, &decoded); err != nil {
+						return nil, fmt.Errorf("tool input for block %d is not a valid JSON object", *event.Index)
+					}
+				}
+				raw = toToolsetMemberInput(block.memberName, decoded)
 			}
 			if len(raw) == 0 {
 				raw = []byte("{}")
@@ -1453,7 +1789,11 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 			}
 			parts := []StreamPart{StreamToolInputEnd{ID: id}}
 			if block.typ != "input_json" {
-				parts = append(parts, StreamToolCall{ToolCallContent: ToolCallContent{Type: streamToolCallType(block.typ), ToolCallID: block.id, ToolName: block.name, Input: append(json.RawMessage(nil), raw...), ProviderExecuted: block.providerExecuted || block.typ != "tool_use", Dynamic: block.dynamic, ProviderMetadata: block.providerMetadata}})
+				call := ToolCallContent{Type: streamToolCallType(block.typ), ToolCallID: block.id, ToolName: block.name, Input: append(json.RawMessage(nil), raw...), ProviderExecuted: block.providerExecuted || block.typ != "tool_use", Dynamic: block.dynamic, ProviderMetadata: block.providerMetadata}
+				if block.toolsetName != "" && block.typ == "tool_use" {
+					call.ToolsetName = block.toolsetName
+				}
+				parts = append(parts, StreamToolCall{ToolCallContent: call})
 			}
 			return parts, nil
 		case "source", "web_search_result", "web_fetch_result", "tool_result", "mcp_tool_result", "web_fetch_tool_result", "web_search_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result", "advisor_tool_result":
@@ -1462,9 +1802,11 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 	case "message_delta":
 		var event struct {
 			Delta struct {
-				StopReason string `json:"stop_reason"`
+				StopReason       string            `json:"stop_reason"`
+				SafeguardResults []SafeguardResult `json:"safeguard_results,omitempty"`
 			} `json:"delta"`
-			Usage apiUsage `json:"usage"`
+			Usage                apiUsage              `json:"usage"`
+			InputTransformations []InputTransformation `json:"input_transformations,omitempty"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
 			return nil, err
@@ -1473,6 +1815,12 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 			return nil, fmt.Errorf("message_delta with active content blocks")
 		}
 		s.messageDeltaSeen = true
+		if event.InputTransformations != nil {
+			s.inputTransformations = event.InputTransformations
+		}
+		if event.Delta.SafeguardResults != nil {
+			s.safeguardResults = event.Delta.SafeguardResults
+		}
 		usage := mergeAPIUsage(s.initialUsage, event.Usage)
 		converted, err := convertAPIUsage(usage)
 		if err != nil {
@@ -1485,7 +1833,26 @@ func (s *streamParserState) handle(eventType string, data, raw []byte, truncated
 			return nil, fmt.Errorf("message_stop with active content blocks")
 		}
 		s.stopped = true
-		return []StreamPart{s.finish}, nil
+		var parts []StreamPart
+		if !s.hasWebSearchResults {
+			for _, citation := range s.fallbackWebCitations {
+				if source, ok := citationToSource(citation); ok {
+					parts = append(parts, StreamSource{SourceContent: source})
+				}
+			}
+		}
+		finish := s.finish
+		if s.inputTransformations != nil || s.safeguardResults != nil {
+			meta := ProviderMetadata{}
+			if s.inputTransformations != nil {
+				meta["inputTransformations"] = s.inputTransformations
+			}
+			if s.safeguardResults != nil {
+				meta["safeguardResults"] = s.safeguardResults
+			}
+			finish.ProviderMetadata = meta
+		}
+		return append(parts, finish), nil
 	default:
 		return nil, fmt.Errorf("unsupported event type %q", eventType)
 	}

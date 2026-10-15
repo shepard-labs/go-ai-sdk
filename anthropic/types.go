@@ -18,12 +18,23 @@ const (
 	ModelClaudeFable5   ModelID = "claude-fable-5"
 	ModelClaudeSonnet5  ModelID = "claude-sonnet-5"
 	ModelClaudeOpus5    ModelID = "claude-opus-5"
+	ModelClaudeHaiku55  ModelID = "claude-haiku-5-5"
+	ModelClaudeOpus55   ModelID = "claude-opus-5-5"
+	ModelClaudeFable51  ModelID = "claude-fable-5-1"
+	ModelClaudeSonnet55 ModelID = "claude-sonnet-5-5"
 )
 
 type ModelCapabilities struct {
-	MaxOutputTokens  int
-	StructuredOutput bool
-	RejectsSampling  bool
+	MaxOutputTokens                        int
+	StructuredOutput                       bool
+	RejectsSampling                        bool
+	SupportsAdaptiveThinking               bool
+	SupportsXhighEffort                    bool
+	RejectsThinkingDisabledAboveHighEffort bool
+	RejectsThinkingDisabled                bool
+	RejectsBudgetThinking                  bool
+	RejectsForcedToolUse                   bool
+	SupportsBetweenToolsThinking           bool
 }
 
 type Provider interface {
@@ -55,6 +66,8 @@ type Delta interface{ IsDelta() }
 type SystemMessage struct {
 	Content      string
 	CacheControl *CacheControl
+	ClearAt      string `json:"clear_at,omitempty"`
+	Effort       string `json:"effort,omitempty"`
 }
 
 func (SystemMessage) IsMessage() {}
@@ -113,7 +126,10 @@ type RedactedThinkingContent struct{ Data string }
 func (RedactedThinkingContent) IsAssistantContent() {}
 func (RedactedThinkingContent) IsResponseContent()  {}
 
-type CompactionContent struct{ Text string }
+type CompactionContent struct {
+	Text      string
+	Signature string
+}
 
 func (CompactionContent) IsAssistantContent() {}
 func (CompactionContent) IsResponseContent()  {}
@@ -126,6 +142,7 @@ type ToolCallContent struct {
 	Input            json.RawMessage
 	ProviderExecuted bool
 	Dynamic          bool
+	ToolsetName      string
 	ProviderMetadata ProviderMetadata
 	Caller           *ToolCallCallerInfo
 	Raw              map[string]json.RawMessage
@@ -170,6 +187,7 @@ type ToolResultContent struct {
 	IsError          bool
 	ProviderExecuted bool
 	Dynamic          bool
+	ToolsetName      string
 	ProviderMetadata ProviderMetadata
 	Caller           *ToolCallCallerInfo
 	Raw              map[string]json.RawMessage
@@ -179,6 +197,15 @@ type ToolResultContent struct {
 func (ToolResultContent) IsUserContent()      {}
 func (ToolResultContent) IsAssistantContent() {}
 func (ToolResultContent) IsContent()          {}
+
+type FallbackContent struct {
+	FromModel string
+	ToModel   string
+}
+
+func (FallbackContent) IsAssistantContent() {}
+func (FallbackContent) IsResponseContent()  {}
+func (FallbackContent) IsContent()          {}
 
 type ToolResultPart interface{ IsToolResultPart() }
 
@@ -371,12 +398,25 @@ type Citation struct {
 	EncryptedIndex  string `json:"encrypted_index,omitempty"`
 	DocumentIndex   int    `json:"document_index,omitempty"`
 	DocumentTitle   string `json:"document_title,omitempty"`
+	FileID          string `json:"file_id,omitempty"`
+	Source          string `json:"source,omitempty"`
 	StartPageNumber int    `json:"start_page_number,omitempty"`
 	EndPageNumber   int    `json:"end_page_number,omitempty"`
 	StartChar       int    `json:"start_char,omitempty"`
 	EndChar         int    `json:"end_char,omitempty"`
 	StartCharIndex  int    `json:"start_char_index,omitempty"`
 	EndCharIndex    int    `json:"end_char_index,omitempty"`
+}
+
+type InputTransformation struct {
+	Type   string `json:"type"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+type SafeguardResult struct {
+	Type   string          `json:"type"`
+	Status json.RawMessage `json:"status,omitempty"`
 }
 
 type ContainerInfo struct{ ID string }
@@ -627,6 +667,8 @@ type Tool struct {
 	Citations           *CitationsConfig         `json:"citations,omitempty"`
 	MaxContentTokens    *int                     `json:"max_content_tokens,omitempty"`
 	UserLocation        *UserLocation            `json:"user_location,omitempty"`
+	UseCache            *bool                    `json:"use_cache,omitempty"`
+	ResponseInclusion   string                   `json:"response_inclusion,omitempty"`
 	AdvisorModel        string                   `json:"advisor_model,omitempty"`
 	AdvisorMaxUses      *int                     `json:"advisor_max_uses,omitempty"`
 	AdvisorCaching      *CachingConfig           `json:"advisor_caching,omitempty"`
@@ -685,15 +727,32 @@ type ThinkingType string
 type ThinkingDisplay string
 
 const (
-	ThinkingTypeAdaptive ThinkingType = "adaptive"
-	ThinkingTypeEnabled  ThinkingType = "enabled"
-	ThinkingTypeDisabled ThinkingType = "disabled"
+	ThinkingTypeAdaptive     ThinkingType = "adaptive"
+	ThinkingTypeEnabled      ThinkingType = "enabled"
+	ThinkingTypeDisabled     ThinkingType = "disabled"
+	ThinkingTypeBetweenTools ThinkingType = "between_tools"
+)
+
+const (
+	ThinkingDisplayOmitted    ThinkingDisplay = "omitted"
+	ThinkingDisplaySummarized ThinkingDisplay = "summarized"
+	ThinkingDisplayUpdates    ThinkingDisplay = "updates"
+)
+
+type ThinkingBlockBinding struct {
+	PrefixMismatchBehavior string `json:"prefix_mismatch_behavior,omitempty"`
+}
+
+const (
+	ThinkingBlockBindingError     string = "error"
+	ThinkingBlockBindingDropBlock string = "drop_block"
 )
 
 type ThinkingConfig struct {
 	Type         ThinkingType
 	BudgetTokens int
 	Display      ThinkingDisplay
+	BlockBinding *ThinkingBlockBinding
 }
 
 type StructuredOutputMode string

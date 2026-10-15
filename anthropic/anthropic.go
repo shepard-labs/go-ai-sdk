@@ -312,6 +312,21 @@ func betaHeadersForOptions(opts ModelOptions) []string {
 	if opts.Speed == "fast" {
 		add("fast-mode-2026-02-01")
 	}
+	if thinking := opts.effectiveThinking; thinking != nil {
+		if thinking.Display == string(ThinkingDisplayUpdates) {
+			add("thinking-display-updates-2026-08-18")
+		}
+		if thinking.BlockBinding != nil {
+			add("thinking-binding-controls-2026-08-01")
+		}
+	} else if opts.Thinking != nil {
+		if opts.Thinking.Display == ThinkingDisplayUpdates {
+			add("thinking-display-updates-2026-08-18")
+		}
+		if opts.Thinking.BlockBinding != nil {
+			add("thinking-binding-controls-2026-08-01")
+		}
+	}
 	for _, tool := range opts.RequestTools {
 		switch tool.ID {
 		case "anthropic.code_execution_20250522":
@@ -320,13 +335,16 @@ func betaHeadersForOptions(opts ModelOptions) []string {
 			add("code-execution-2025-08-25")
 		case "anthropic.computer_20251124":
 			add("computer-use-2025-11-24")
+		// NOTE: anthropic.computer_toolset_20260801 intentionally has no beta
+		// case: upstream @ai-sdk/anthropic@4.0.79 prepare-tools adds no beta
+		// for the computer toolset, so none is required here either.
 		case "anthropic.text_editor_20250728":
 			add("text-editor-2025-07-28")
 		case "anthropic.web_fetch_20250910":
 			add("web-fetch-2025-09-10")
 		case "anthropic.web_search_20250305":
 			add("web-search-2025-03-05")
-		case "anthropic.web_fetch_20260209", "anthropic.web_search_20260209":
+		case "anthropic.web_fetch_20260209", "anthropic.web_search_20260209", "anthropic.web_fetch_20260318", "anthropic.web_search_20260318":
 			add("code-execution-web-tools-2026-02-09")
 		case "anthropic.advisor_20260301":
 			add("advisor-tool-2026-03-01")
