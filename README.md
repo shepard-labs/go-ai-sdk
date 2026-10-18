@@ -21,6 +21,7 @@ github.com/shepard-labs/go-ai-sdk/google
 github.com/shepard-labs/go-ai-sdk/openai
 github.com/shepard-labs/go-ai-sdk/openaicompatible
 github.com/shepard-labs/go-ai-sdk/openrouter
+github.com/shepard-labs/go-ai-sdk/typesafe
 ```
 
 Provider-neutral `llm` packages:
@@ -34,6 +35,8 @@ github.com/shepard-labs/go-ai-sdk/llm/adapters/google
 github.com/shepard-labs/go-ai-sdk/llm/adapters/openai
 github.com/shepard-labs/go-ai-sdk/llm/adapters/openaicompatible
 github.com/shepard-labs/go-ai-sdk/llm/adapters/openrouter
+github.com/shepard-labs/go-ai-sdk/llm/decision           // experimental provider-neutral decision Client
+github.com/shepard-labs/go-ai-sdk/llm/decision/typesafe  // TypeSafe adapter for llm/decision
 github.com/shepard-labs/go-ai-sdk/llm/registry           // provider-name registry and NewClient
 github.com/shepard-labs/go-ai-sdk/llm/schema             // Go structs to JSON-schema tools
 github.com/shepard-labs/go-ai-sdk/llm/store              // run persistence interfaces and codecs
@@ -434,6 +437,55 @@ for _, item := range ranking.Ranking {
     fmt.Println(item.Index, item.RelevanceScore)
 }
 ```
+
+## TypeSafe
+
+Use the `typesafe` package for TypeSafe AI's model: structured questions (choice, score, boolean, box) answered against shared state in a single request. `APIKey` falls back to `TYPESAFE_AI_API_KEY`, and `BaseURL` falls back to `TYPESAFE_AI_BASE_URL` (default `https://api.typesafe.ai/v1`). The provider-neutral entry point is `llm/decision` with the adapter in `llm/decision/typesafe`.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/shepard-labs/go-ai-sdk/llm/decision"
+    decisiontypesafe "github.com/shepard-labs/go-ai-sdk/llm/decision/typesafe"
+    "github.com/shepard-labs/go-ai-sdk/typesafe"
+)
+
+func main() {
+    client, err := decisiontypesafe.NewClient(typesafe.ProviderSettings{}, "jev-latest")
+    if err != nil {
+        log.Fatal(err)
+    }
+    result, err := client.Decide(context.Background(), decision.CallOptions{
+        State: []decision.StatePart{
+            decision.TextStatePart{Text: "Customer: I was charged twice for order #4821."},
+        },
+        Questions: map[string]decision.Question{
+            "department": decision.ChoiceQuestion{
+                Criteria: map[string]*decision.Input{
+                    "billing":   ptr(decision.StringInput("Charges, invoices, and refunds")),
+                    "technical": ptr(decision.StringInput("Bugs and outages")),
+                    "other":     ptr(decision.NullInput()),
+                },
+            },
+            "requestsRefund": decision.BooleanQuestion{},
+        },
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(result.Answers["department"])     // decision.ChoiceAnswer with probabilities
+    fmt.Println(result.Answers["requestsRefund"]) // decision.BooleanAnswer with P(true)
+}
+
+func ptr[T any](v T) *T { return &v }
+```
+
+TypeSafe confidence (distinct from probabilities) is exposed separately at `result.ProviderMetadata["typesafe"]["confidence"]` per question ID; boolean answers have no confidence entry. The API rounds probabilities and scores to 2 decimal places, declared by `result.Rounding`; values are not altered. Choice questions accept at most 255 options and score questions at most 10 levels. Image state and box questions switch the request to multipart and enable the `TypeSafe-Danger-Zone-Images` header; `ProviderOptions["typesafe"]["longContext"]` enables long-context mode.
 
 ## Authentication
 
@@ -900,6 +952,7 @@ google/                Google Gemini native provider module
 openai/                OpenAI native provider module
 openaicompatible/      OpenAI-compatible provider module
 openrouter/            OpenRouter native provider module
+typesafe/              TypeSafe AI experimental decision provider module
 
 llm/                   Provider-neutral Client, messages, tools, agent loop
 ├── adapters/          Adapters from native provider models to llm.Client
@@ -909,6 +962,8 @@ llm/                   Provider-neutral Client, messages, tools, agent loop
 │   ├── openai/
 │   ├── openaicompatible/
 │   └── openrouter/
+├── decision/          Experimental provider-neutral decision Client
+│   └── typesafe/      TypeSafe adapter for llm/decision
 ├── registry/          Provider-name registry and registry.NewClient
 ├── schema/            Go struct reflection to JSON-schema tool definitions
 ├── store/             Run persistence interfaces and codecs
