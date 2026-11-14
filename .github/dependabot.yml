@@ -9,6 +9,7 @@ updates:
       - "/openai"
       - "/openaicompatible"
       - "/openrouter"
+      - "/typesafe"
     schedule:
       interval: "weekly"
       day: "monday"

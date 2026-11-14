@@ -10,7 +10,7 @@ require (
 	github.com/shepard-labs/go-ai-sdk/openai v1.0.9
 	github.com/shepard-labs/go-ai-sdk/openaicompatible v1.0.9
 	github.com/shepard-labs/go-ai-sdk/openrouter v1.0.9
-	github.com/shepard-labs/go-ai-sdk/typesafe v1.0.9
+	github.com/shepard-labs/go-ai-sdk/typesafe v1.0.21
 	github.com/shepard-labs/go-clients/storage v1.0.3
 )
 
