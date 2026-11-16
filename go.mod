@@ -3,7 +3,7 @@ module github.com/shepard-labs/go-ai-sdk
 go 1.26.0
 
 require (
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/shepard-labs/go-ai-sdk/anthropic v1.0.9
 	github.com/shepard-labs/go-ai-sdk/cohere v1.0.9
 	github.com/shepard-labs/go-ai-sdk/google v1.0.9
